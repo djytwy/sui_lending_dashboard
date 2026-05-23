@@ -1,0 +1,448 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { DataQuality, ProtocolId, YieldApiResponse, YieldOpportunity } from "@/lib/yield-types";
+
+const CLIENT_REFRESH_INTERVAL_MS = 30_000;
+
+const PROTOCOL_META: Record<
+  ProtocolId,
+  {
+    accent: string;
+    glow: string;
+    label: string;
+  }
+> = {
+  navi: {
+    accent: "#7F7FFF",
+    glow: "shadow-[0_0_36px_rgba(127,127,255,0.18)]",
+    label: "Lending",
+  },
+  scallop: {
+    accent: "#9FFFBF",
+    glow: "shadow-[0_0_36px_rgba(159,255,191,0.16)]",
+    label: "Lending",
+  },
+  alphafi: {
+    accent: "#FFEA4B",
+    glow: "shadow-[0_0_36px_rgba(255,234,75,0.15)]",
+    label: "On-chain",
+  },
+  bluefin: {
+    accent: "#3E98C7",
+    glow: "shadow-[0_0_36px_rgba(62,152,199,0.16)]",
+    label: "LP",
+  },
+};
+
+const PROTOCOL_NAMES: Record<ProtocolId, string> = {
+  navi: "NAVI Protocol",
+  scallop: "Scallop",
+  alphafi: "AlphaFi",
+  bluefin: "Bluefin",
+};
+
+const QUALITY_LABEL: Record<DataQuality, string> = {
+  live: "Live",
+  partial: "Partial",
+  unavailable: "Offline",
+};
+
+const currencyFormatter = new Intl.NumberFormat("en-US", {
+  currency: "USD",
+  maximumFractionDigits: 0,
+  notation: "compact",
+  style: "currency",
+});
+
+const percentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2,
+});
+
+export default function YieldDashboard() {
+  const [data, setData] = useState<YieldApiResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async (silent = false) => {
+    if (silent) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
+    setError(null);
+
+    try {
+      const response = await fetch("/api/yields", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`API ${response.status}`);
+      }
+
+      const payload = (await response.json()) as YieldApiResponse;
+      setData(payload);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to load yield data");
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const interval = window.setInterval(() => refresh(true), CLIENT_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
+
+  const best = useMemo(() => {
+    return data?.opportunities.find((item) => item.apy !== null) ?? null;
+  }, [data]);
+
+  const liveCount = data?.opportunities.filter((item) => item.status === "live").length ?? 0;
+
+  return (
+    <main className="min-h-screen bg-[#0b0d14] text-[#fdfdff]">
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(102,103,238,0.16)_0%,rgba(11,13,20,0)_26%),linear-gradient(90deg,rgba(159,255,191,0.07),rgba(242,77,176,0.06),rgba(255,234,75,0.04))]" />
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:48px_48px] opacity-30" />
+
+      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+        <header className="flex flex-col gap-4 border-b border-[#373A4D]/70 pb-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-sm font-black text-[#9FFFBF]">
+              SY
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase text-[#8585B8]">Sui mainnet yield router</p>
+              <h1 className="text-2xl font-semibold text-white sm:text-3xl">USDC 实时收益面板</h1>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill label="Sui" value="Mainnet" tone="violet" />
+            <StatusPill label="资产" value="USDC" tone="green" />
+            <StatusPill label="刷新" value="30s" tone="yellow" />
+            <button
+              className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#9FFFBF] hover:text-[#9FFFBF] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isLoading || isRefreshing}
+              onClick={() => refresh(true)}
+              type="button"
+            >
+              {isRefreshing ? "刷新中" : "刷新数据"}
+            </button>
+          </div>
+        </header>
+
+        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)]">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm text-[#8585B8]">当前最高 USDC 收益</p>
+                <div className="mt-3 flex items-end gap-3">
+                  <span className="text-5xl font-semibold text-white sm:text-6xl">
+                    {best?.apy === null || !best ? "--" : formatPercent(best.apy)}
+                  </span>
+                  <span className="mb-2 text-sm font-semibold text-[#9FFFBF]">APY</span>
+                </div>
+              </div>
+              <div className="rounded-lg border border-[#373A4D] bg-[#1c1e2c] px-3 py-2 text-right">
+                <p className="text-xs text-[#8585B8]">Live protocols</p>
+                <p className="mt-1 text-2xl font-semibold text-white">{liveCount}/4</p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <MetricBox label="协议" value={best?.protocolName ?? "--"} />
+              <MetricBox label="产品" value={best?.asset ?? "--"} />
+              <MetricBox label="TVL" value={formatCurrency(best?.tvlUsd)} />
+            </div>
+
+            <div className="mt-6 rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-white">{best?.product ?? "等待实时收益数据"}</p>
+                  <p className="mt-1 text-sm text-[#a8a8c7]">{best?.note ?? "正在从收益源加载 Sui USDC 市场。"}</p>
+                </div>
+                <div className="text-left sm:text-right">
+                  <p className="text-xs text-[#8585B8]">APR</p>
+                  <p className="text-lg font-semibold text-[#FFEA4B]">{formatPercent(best?.apr)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-[#8585B8]">数据源状态</p>
+                <h2 className="mt-1 text-xl font-semibold text-white">实时聚合路径</h2>
+              </div>
+              <QualityBadge status={error ? "unavailable" : "live"} />
+            </div>
+
+            <div className="mt-5 space-y-3">
+              <SourceRow
+                label="DeFiLlama Yields"
+                status={data?.sources.defiLlama ?? "partial"}
+                value="NAVI / Scallop / Bluefin"
+              />
+              <SourceRow
+                label="Sui GraphQL"
+                status={data?.sources.suiGraphql ?? "partial"}
+                value="AlphaFi AlphaLend"
+              />
+              <SourceRow
+                label="前端轮询"
+                status="live"
+                value={data ? `${Math.round(data.refreshIntervalMs / 1000)} 秒` : "30 秒"}
+              />
+            </div>
+
+            <div className="mt-5 border-t border-[#373A4D] pt-4">
+              <p className="text-xs text-[#8585B8]">最后更新</p>
+              <p className="mt-1 text-sm font-medium text-white">{formatDate(data?.generatedAt)}</p>
+              {error ? <p className="mt-3 text-sm text-[#FF4D29]">加载失败：{error}</p> : null}
+              {!error && data?.warnings.length ? (
+                <p className="mt-3 text-sm text-[#FFEA4B]">{data.warnings[0]}</p>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
+            <ProtocolCard key={opportunity.id} opportunity={opportunity} loading={isLoading && !data} />
+          ))}
+        </section>
+
+        <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
+          <div className="flex flex-col gap-2 border-b border-[#373A4D] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm text-[#8585B8]">APR / APY 明细</p>
+              <h2 className="text-xl font-semibold text-white">USDC 收益列表</h2>
+            </div>
+            <p className="text-sm text-[#a8a8c7]">AlphaFi 为链上计算；其它协议来自实时收益聚合源。</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[860px] table-fixed text-left">
+              <thead className="text-xs uppercase text-[#8585B8]">
+                <tr className="border-b border-[#373A4D]">
+                  <th className="w-[180px] px-4 py-3 font-medium">协议</th>
+                  <th className="w-[220px] px-4 py-3 font-medium">产品</th>
+                  <th className="w-[120px] px-4 py-3 text-right font-medium">APR</th>
+                  <th className="w-[120px] px-4 py-3 text-right font-medium">APY</th>
+                  <th className="w-[140px] px-4 py-3 text-right font-medium">TVL</th>
+                  <th className="w-[130px] px-4 py-3 font-medium">风险</th>
+                  <th className="w-[150px] px-4 py-3 font-medium">来源</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.opportunities ?? skeletonProtocols()).map((item) => (
+                  <tr key={`${item.id}-row`} className="border-b border-[#232534] last:border-b-0">
+                    <td className="px-4 py-4">
+                      <div className="flex items-center gap-3">
+                        <span
+                          className="size-3 rounded-sm"
+                          style={{ backgroundColor: PROTOCOL_META[item.protocol].accent }}
+                        />
+                        <span className="font-semibold text-white">{item.protocolName}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 text-sm text-[#dfdfed]">{item.product}</td>
+                    <td className="px-4 py-4 text-right font-semibold text-[#FFEA4B]">
+                      {formatPercent(item.apr)}
+                    </td>
+                    <td className="px-4 py-4 text-right font-semibold text-[#9FFFBF]">
+                      {formatPercent(item.apy)}
+                    </td>
+                    <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatCurrency(item.tvlUsd)}</td>
+                    <td className="px-4 py-4 text-sm text-[#dfdfed]">{riskLabel(item)}</td>
+                    <td className="px-4 py-4 text-sm text-[#a8a8c7]">{item.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function ProtocolCard({
+  opportunity,
+  loading,
+}: {
+  opportunity: YieldOpportunity;
+  loading: boolean;
+}) {
+  const meta = PROTOCOL_META[opportunity.protocol];
+  const barWidth = Math.min(Math.max(opportunity.apy ?? 0, 0), 60);
+
+  return (
+    <article className={`min-h-[252px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 ${meta.glow}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div
+            className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-xs font-black text-[#0b0d14]"
+            style={{ backgroundColor: meta.accent }}
+          >
+            {opportunity.protocolName.slice(0, 2).toUpperCase()}
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">{opportunity.protocolName}</h3>
+            <p className="text-xs text-[#8585B8]">{meta.label}</p>
+          </div>
+        </div>
+        <QualityBadge status={loading ? "partial" : opportunity.status} />
+      </div>
+
+      <div className="mt-5">
+        <p className="text-xs text-[#8585B8]">APY</p>
+        <p className="mt-1 text-4xl font-semibold text-white">{loading ? "--" : formatPercent(opportunity.apy)}</p>
+      </div>
+
+      <div className="mt-4 h-2 rounded-md bg-[#232534]">
+        <div
+          className="h-2 rounded-md"
+          style={{
+            backgroundColor: meta.accent,
+            width: `${loading ? 0 : barWidth}%`,
+          }}
+        />
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <p className="text-xs text-[#8585B8]">APR</p>
+          <p className="font-semibold text-[#FFEA4B]">{loading ? "--" : formatPercent(opportunity.apr)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-[#8585B8]">TVL</p>
+          <p className="font-semibold text-white">{loading ? "--" : formatCurrency(opportunity.tvlUsd)}</p>
+        </div>
+      </div>
+
+      <p className="mt-4 min-h-10 text-sm text-[#a8a8c7]">{opportunity.product}</p>
+    </article>
+  );
+}
+
+function StatusPill({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "green" | "violet" | "yellow";
+}) {
+  const toneClass = {
+    green: "border-[#9FFFBF]/30 bg-[#9FFFBF]/10 text-[#9FFFBF]",
+    violet: "border-[#7F7FFF]/30 bg-[#7F7FFF]/10 text-[#dfdfed]",
+    yellow: "border-[#FFEA4B]/30 bg-[#FFEA4B]/10 text-[#FFEA4B]",
+  }[tone];
+
+  return (
+    <div className={`flex h-10 items-center gap-2 rounded-lg border px-3 text-sm ${toneClass}`}>
+      <span className="text-[#8585B8]">{label}</span>
+      <span className="font-semibold">{value}</span>
+    </div>
+  );
+}
+
+function MetricBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-[#373A4D] bg-[#1c1e2c] p-3">
+      <p className="text-xs text-[#8585B8]">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+function QualityBadge({ status }: { status: DataQuality }) {
+  const className =
+    status === "live"
+      ? "border-[#9FFFBF]/35 bg-[#9FFFBF]/10 text-[#9FFFBF]"
+      : status === "partial"
+        ? "border-[#FFEA4B]/35 bg-[#FFEA4B]/10 text-[#FFEA4B]"
+        : "border-[#FF4D29]/35 bg-[#FF4D29]/10 text-[#FF4D29]";
+
+  return (
+    <span className={`inline-flex h-7 items-center rounded-md border px-2 text-xs font-semibold ${className}`}>
+      {QUALITY_LABEL[status]}
+    </span>
+  );
+}
+
+function SourceRow({
+  label,
+  status,
+  value,
+}: {
+  label: string;
+  status: DataQuality;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-[#373A4D] bg-[#1c1e2c] px-3 py-3">
+      <div>
+        <p className="text-sm font-semibold text-white">{label}</p>
+        <p className="text-xs text-[#8585B8]">{value}</p>
+      </div>
+      <QualityBadge status={status} />
+    </div>
+  );
+}
+
+function skeletonProtocols(): YieldOpportunity[] {
+  return (Object.keys(PROTOCOL_META) as ProtocolId[]).map((protocol) => ({
+    id: `${protocol}-loading`,
+    protocol,
+    protocolName: PROTOCOL_NAMES[protocol],
+    product: "Loading USDC market",
+    asset: "USDC",
+    apr: null,
+    apy: null,
+    tvlUsd: null,
+    baseApy: null,
+    rewardApy: null,
+    utilization: null,
+    exposure: "unknown",
+    ilRisk: "unknown",
+    source: "Loading",
+    poolId: null,
+    url: null,
+    status: "partial",
+    note: "Loading",
+  }));
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  return `${percentFormatter.format(value)}%`;
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  return currencyFormatter.format(value);
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "--";
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(new Date(value));
+}
+
+function riskLabel(item: YieldOpportunity) {
+  if (item.ilRisk === "no" && item.exposure === "single") return "单资产";
+  if (item.ilRisk === "yes") return "LP / IL";
+  if (item.exposure === "multi") return "多资产";
+  return item.ilRisk === "unknown" ? "未知" : item.ilRisk;
+}
