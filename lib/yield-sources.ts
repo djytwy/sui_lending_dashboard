@@ -4,111 +4,135 @@ import {
   type ProtocolId,
   type YieldApiResponse,
   type YieldOpportunity,
+  type YieldRateBreakdown,
 } from "./yield-types";
 
 const REFRESH_INTERVAL_MS = 30_000;
-const DEFILLAMA_POOLS_URL = "https://yields.llama.fi/pools";
-const SUI_GRAPHQL_URL = "https://graphql.mainnet.sui.io/graphql";
-const ALPHAFI_MARKETS_TABLE_ID =
-  "0x2326d387ba8bb7d24aa4cfa31f9a1e58bf9234b097574afb06c5dfb267df4c2e";
 const NATIVE_USDC_COIN_TYPE =
   "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
-const ONE_E18 = BigInt("1000000000000000000");
+const NAVI_POOLS_URL =
+  "https://open-api.naviprotocol.io/api/navi/pools?env=prod&sdk=1.4.6&market=main";
+const ALPHALEND_CACHE_TTL_MS = 60_000;
 
-type DefiLlamaPool = {
-  chain: string;
-  project: string;
+type DecimalLike = {
+  toString: () => string;
+};
+
+type AlphaLendRewardApr = {
+  coinType: string;
+  rewardApr: DecimalLike | number | string;
+};
+
+type AlphaLendMarketData = {
+  marketId: string | number;
+  coinType: string;
+  decimalDigit: number;
+  totalSupply: DecimalLike | number | string;
+  totalBorrow: DecimalLike | number | string;
+  price: DecimalLike | number | string;
+  utilizationRate: DecimalLike | number | string;
+  supplyApr: {
+    interestApr: DecimalLike | number | string;
+    stakingApr: DecimalLike | number | string;
+    rewards: AlphaLendRewardApr[];
+  };
+  borrowApr: {
+    interestApr: DecimalLike | number | string;
+    rewards: AlphaLendRewardApr[];
+  };
+};
+
+type ScallopMarketPool = {
+  coinName: string;
   symbol: string;
-  tvlUsd?: number;
-  apyBase?: number | null;
-  apyReward?: number | null;
-  apy?: number | null;
-  pool: string;
-  stablecoin?: boolean;
-  ilRisk?: string | null;
-  exposure?: string | null;
-  poolMeta?: string | null;
-  underlyingTokens?: string[] | null;
-  apyPct1D?: number | null;
-  apyPct7D?: number | null;
-  apyMean30d?: number | null;
+  coinType: string;
+  supplyApr: number;
+  supplyApy: number;
+  borrowApr: number;
+  borrowApy: number;
+  supplyCoin: number;
+  borrowCoin: number;
+  utilizationRate: number;
+  coinPrice: number;
 };
 
-type DefiLlamaResponse = {
-  data: DefiLlamaPool[];
+type NaviPool = {
+  id: number;
+  uniqueId: string;
+  suiCoinType: string;
+  status: string;
+  token?: {
+    symbol?: string;
+    decimals?: number;
+    price?: number;
+  };
+  oracle?: {
+    price?: string | number;
+  };
+  totalSupplyAmount?: string;
+  borrowedAmount?: string;
+  supplyIncentiveApyInfo?: NaviApyInfo;
+  borrowIncentiveApyInfo?: NaviApyInfo;
+  tags?: string[];
 };
 
-type AlphaFiMarketValue = {
-  market_id: string;
-  coin_type: string;
-  xtoken_supply: string;
-  borrowed_amount: string;
-  writeoff_amount: string;
-  balance_holding: string;
-  unclaimed_spread_fee: string;
-  unclaimed_spread_fee_protocol: string;
-  decimal_digit: {
-    value: string;
-  };
-  config: {
-    active: boolean;
-    interest_rate_kinks: string;
-    interest_rates: string[];
-    spread_fee_bps: string;
-  };
+type NaviApyInfo = {
+  vaultApr?: string;
+  boostedApr?: string;
+  rewardCoin?: string[];
+  apy?: string;
+  voloApy?: string;
+  stakingYieldApy?: string;
+  treasuryApy?: string;
+  underlyingApy?: string;
 };
 
-type AlphaFiDynamicFieldNode = {
-  address: string;
-  name: {
-    json: string;
-  };
-  value: {
-    __typename: "MoveValue" | "MoveObject";
-    json?: AlphaFiMarketValue;
-    contents?: {
-      json?: AlphaFiMarketValue;
-    };
-  };
-};
-
-type AlphaFiGraphqlResponse = {
-  data?: {
-    address?: {
-      dynamicFields?: {
-        nodes?: AlphaFiDynamicFieldNode[];
-      };
-    } | null;
-  } | null;
-  errors?: { message: string }[];
+type NaviPoolsResponse = {
+  data?: NaviPool[];
+  code?: number;
 };
 
 export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   const warnings: string[] = [];
-  const [defiLlamaResult, alphaFiResult] = await Promise.allSettled([
-    fetchDefiLlamaOpportunities(),
-    fetchAlphaFiUsdcOpportunity(),
+  const [scallopResult, alphaLendResult, naviResult] = await Promise.allSettled([
+    fetchScallopUsdcOpportunity(),
+    fetchAlphaLendUsdcOpportunities(),
+    fetchNaviUsdcOpportunity(),
   ]);
 
-  let defiLlamaStatus: DataQuality = "unavailable";
-  let suiGraphqlStatus: DataQuality = "unavailable";
   const opportunities: YieldOpportunity[] = [];
+  let scallopSdk: DataQuality = "unavailable";
+  let alphaLendSdk: DataQuality = "unavailable";
+  let naviOpenApi: DataQuality = "unavailable";
+  let bluefinLend: DataQuality = "unavailable";
 
-  if (defiLlamaResult.status === "fulfilled") {
-    defiLlamaStatus = defiLlamaResult.value.status;
-    opportunities.push(...defiLlamaResult.value.opportunities);
-    warnings.push(...defiLlamaResult.value.warnings);
+  if (scallopResult.status === "fulfilled") {
+    scallopSdk = scallopResult.value.status;
+    opportunities.push(scallopResult.value.opportunity);
+    warnings.push(...scallopResult.value.warnings);
   } else {
-    warnings.push(`DeFiLlama source failed: ${errorMessage(defiLlamaResult.reason)}`);
+    warnings.push(`Scallop SDK source failed: ${errorMessage(scallopResult.reason)}`);
+    opportunities.push(unavailableOpportunity("scallop", "Scallop USDC lending pool"));
   }
 
-  if (alphaFiResult.status === "fulfilled") {
-    suiGraphqlStatus = alphaFiResult.value.status;
-    opportunities.push(alphaFiResult.value.opportunity);
-    warnings.push(...alphaFiResult.value.warnings);
+  if (alphaLendResult.status === "fulfilled") {
+    alphaLendSdk = alphaLendResult.value.status;
+    bluefinLend = alphaLendResult.value.status;
+    opportunities.push(...alphaLendResult.value.opportunities);
+    warnings.push(...alphaLendResult.value.warnings);
   } else {
-    warnings.push(`Sui GraphQL source failed: ${errorMessage(alphaFiResult.reason)}`);
+    warnings.push(`AlphaLend SDK source failed: ${errorMessage(alphaLendResult.reason)}`);
     opportunities.push(unavailableOpportunity("alphafi", "AlphaLend USDC market"));
+    opportunities.push(unavailableOpportunity("bluefin", "Bluefin Lend USDC market"));
+  }
+
+  if (naviResult.status === "fulfilled") {
+    naviOpenApi = naviResult.value.status;
+    opportunities.push(naviResult.value.opportunity);
+    warnings.push(...naviResult.value.warnings);
+  } else {
+    warnings.push(`NAVI open-api source failed: ${errorMessage(naviResult.reason)}`);
+    opportunities.push(unavailableOpportunity("navi", "NAVI USDC supply market"));
   }
 
   const deduped = dedupeByProtocol(opportunities)
@@ -118,7 +142,12 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
       apy: normalizePercent(item.apy),
       baseApy: normalizePercent(item.baseApy),
       rewardApy: normalizePercent(item.rewardApy),
+      borrowApr: normalizePercent(item.borrowApr),
       utilization: normalizePercent(item.utilization),
+      rateBreakdown: item.rateBreakdown.map((entry) => ({
+        ...entry,
+        value: normalizePercent(entry.value),
+      })),
     }))
     .sort((a, b) => (b.apy ?? -1) - (a.apy ?? -1));
 
@@ -129,187 +158,236 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
     asset: "USDC",
     opportunities: deduped,
     sources: {
-      defiLlama: defiLlamaStatus,
-      suiGraphql: suiGraphqlStatus,
+      scallopSdk,
+      alphaLendSdk,
+      naviOpenApi,
+      bluefinLend,
     },
     warnings,
   };
 }
 
-async function fetchDefiLlamaOpportunities(): Promise<{
-  opportunities: YieldOpportunity[];
-  status: DataQuality;
-  warnings: string[];
-}> {
-  const response = await fetch(DEFILLAMA_POOLS_URL, {
-    cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`DeFiLlama returned ${response.status}`);
-  }
-
-  const payload = (await response.json()) as DefiLlamaResponse;
-  const suiUsdcPools = payload.data.filter(isSuiUsdcPool);
-  const warnings: string[] = [];
-  const opportunities: YieldOpportunity[] = [];
-
-  const navi = selectSingleAssetPool(suiUsdcPools, "navi-lending");
-  const scallop = selectSingleAssetPool(suiUsdcPools, "scallop-lend");
-  const bluefin = selectBestPool(
-    suiUsdcPools.filter((pool) => pool.project === "bluefin-spot"),
-  );
-
-  opportunities.push(
-    navi
-      ? fromDefiLlamaPool(navi, "navi", "USDC supply market")
-      : unavailableOpportunity("navi", "USDC supply market"),
-  );
-  opportunities.push(
-    scallop
-      ? fromDefiLlamaPool(scallop, "scallop", "USDC lending pool")
-      : unavailableOpportunity("scallop", "USDC lending pool"),
-  );
-  opportunities.push(
-    bluefin
-      ? fromDefiLlamaPool(bluefin, "bluefin", `${bluefin.symbol} LP pool`)
-      : unavailableOpportunity("bluefin", "USDC liquidity pool"),
-  );
-
-  for (const protocol of ["navi", "scallop", "bluefin"] as ProtocolId[]) {
-    if (opportunities.find((item) => item.protocol === protocol)?.status !== "live") {
-      warnings.push(`${PROTOCOL_NAMES[protocol]} has no live Sui USDC pool in DeFiLlama.`);
-    }
-  }
-
-  return {
-    opportunities,
-    status: opportunities.some((item) => item.status === "live") ? "live" : "unavailable",
-    warnings,
-  };
-}
-
-async function fetchAlphaFiUsdcOpportunity(): Promise<{
+async function fetchScallopUsdcOpportunity(): Promise<{
   opportunity: YieldOpportunity;
   status: DataQuality;
   warnings: string[];
 }> {
-  const query = `
-    query AlphaFiMarkets($parent: SuiAddress!) {
-      address(address: $parent) {
-        dynamicFields(first: 50) {
-          nodes {
-            address
-            name { json }
-            value {
-              __typename
-              ... on MoveValue { json }
-              ... on MoveObject {
-                contents { json }
-              }
-            }
-          }
-        }
-      }
-    }
-  `;
-
-  const response = await fetch(SUI_GRAPHQL_URL, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      query,
-      variables: {
-        parent: ALPHAFI_MARKETS_TABLE_ID,
-      },
-    }),
-    signal: AbortSignal.timeout(12_000),
+  const { ScallopClient } = await import("@scallop-io/sui-scallop-sdk");
+  const client = new ScallopClient({
+    addressId: "695fcdc084f790c04eb068dc",
+    networkType: "mainnet",
   });
+  await client.init();
 
-  if (!response.ok) {
-    throw new Error(`Sui GraphQL returned ${response.status}`);
-  }
+  const pool = (await client.query.getMarketPool("usdc", {
+    indexer: true,
+  })) as ScallopMarketPool | undefined;
 
-  const payload = (await response.json()) as AlphaFiGraphqlResponse;
-  if (payload.errors?.length) {
-    throw new Error(payload.errors.map((item) => item.message).join("; "));
-  }
-
-  const nodes = payload.data?.address?.dynamicFields?.nodes ?? [];
-  const usdcMarket = nodes
-    .map((node) => ({
-      node,
-      value: node.value.json ?? node.value.contents?.json,
-    }))
-    .find(({ value }) => {
-      return value?.config.active && normalizeCoinType(value.coin_type) === NATIVE_USDC_COIN_TYPE;
-    });
-
-  if (!usdcMarket?.value) {
+  if (!pool) {
     return {
-      opportunity: unavailableOpportunity("alphafi", "AlphaLend USDC market"),
+      opportunity: unavailableOpportunity("scallop", "Scallop USDC lending pool"),
       status: "unavailable",
-      warnings: ["AlphaFi active native USDC market was not found on Sui GraphQL."],
+      warnings: ["Scallop SDK did not return the USDC market pool."],
     };
   }
 
-  const metrics = calculateAlphaFiSupplyMetrics(usdcMarket.value);
+  const supplyApr = pool.supplyApr * 100;
+  const supplyApy = pool.supplyApy * 100;
+  const borrowApr = pool.borrowApr * 100;
 
   return {
     opportunity: {
-      id: "alphafi-usdc",
-      protocol: "alphafi",
-      protocolName: PROTOCOL_NAMES.alphafi,
-      product: "AlphaLend USDC market",
-      asset: "USDC",
-      apr: metrics.supplyApr,
-      apy: aprToApy(metrics.supplyApr),
-      tvlUsd: metrics.totalSupply,
-      baseApy: aprToApy(metrics.supplyApr),
+      id: "scallop-usdc",
+      protocol: "scallop",
+      protocolName: PROTOCOL_NAMES.scallop,
+      product: "USDC lending pool",
+      asset: pool.symbol || "USDC",
+      apr: supplyApr,
+      apy: supplyApy,
+      tvlUsd: numberOrNull(pool.supplyCoin * pool.coinPrice),
+      baseApy: supplyApy,
       rewardApy: 0,
-      utilization: metrics.utilization * 100,
+      borrowApr,
+      utilization: pool.utilizationRate * 100,
       exposure: "single",
       ilRisk: "no",
-      source: "Sui GraphQL",
-      poolId: usdcMarket.value.market_id,
-      url: "https://alphafi.xyz/",
+      source: "Scallop SDK",
+      poolId: pool.coinName,
+      url: "https://app.scallop.io/",
       status: "live",
-      note: "Native AlphaLend market data, APR calculated from on-chain utilization curve.",
+      note: "Pulled from Scallop SDK market pool data, matching the protocol market model used by app.scallop.io.",
+      rateBreakdown: [
+        { label: "Supply APR", value: supplyApr, kind: "base" },
+        { label: "Supply APY", value: supplyApy, kind: "base" },
+        { label: "Borrow APR", value: borrowApr, kind: "borrow" },
+      ],
     },
     status: "live",
     warnings: [],
   };
 }
 
-function fromDefiLlamaPool(
-  pool: DefiLlamaPool,
-  protocol: ProtocolId,
-  fallbackProduct: string,
-): YieldOpportunity {
-  const apy = typeof pool.apy === "number" ? pool.apy : null;
+async function fetchAlphaLendUsdcOpportunities(): Promise<{
+  opportunities: YieldOpportunity[];
+  status: DataQuality;
+  warnings: string[];
+}> {
+  const { AlphalendClient } = await import("@alphafi/alphalend-sdk");
+  const client = new AlphalendClient("mainnet");
+  const markets = ((await client.getAllMarkets({
+    useCache: true,
+    cacheTTL: ALPHALEND_CACHE_TTL_MS,
+  })) ?? []) as AlphaLendMarketData[];
+
+  const usdcMarket = markets.find(
+    (market) => normalizeCoinType(market.coinType) === NATIVE_USDC_COIN_TYPE,
+  );
+
+  if (!usdcMarket) {
+    return {
+      opportunities: [
+        unavailableOpportunity("alphafi", "AlphaLend USDC market"),
+        unavailableOpportunity("bluefin", "Bluefin Lend USDC market"),
+      ],
+      status: "unavailable",
+      warnings: ["AlphaLend SDK did not return the native USDC market."],
+    };
+  }
+
+  const alphaFi = fromAlphaLendMarket(usdcMarket, "alphafi");
+  const bluefin = fromAlphaLendMarket(usdcMarket, "bluefin");
+
   return {
-    id: pool.pool,
+    opportunities: [alphaFi, bluefin],
+    status: "live",
+    warnings: [
+      "Bluefin Lend has no separate lend SDK in npm; Bluefin documentation describes the lend product as an AlphaFi collaboration, so rates use the AlphaLend SDK source.",
+    ],
+  };
+}
+
+async function fetchNaviUsdcOpportunity(): Promise<{
+  opportunity: YieldOpportunity;
+  status: DataQuality;
+  warnings: string[];
+}> {
+  const response = await fetch(NAVI_POOLS_URL, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(12_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`NAVI open-api returned ${response.status}`);
+  }
+
+  const payload = (await response.json()) as NaviPoolsResponse;
+  const pools = payload.data ?? [];
+  const pool = selectNaviUsdcPool(pools);
+
+  if (!pool) {
+    return {
+      opportunity: unavailableOpportunity("navi", "NAVI USDC supply market"),
+      status: "unavailable",
+      warnings: ["NAVI open-api did not return a USDC-related market."],
+    };
+  }
+
+  const apyInfo = pool.supplyIncentiveApyInfo ?? {};
+  const borrowInfo = pool.borrowIncentiveApyInfo ?? {};
+  const totalApy = parsePercent(apyInfo.apy);
+  const baseApy = parsePercent(apyInfo.vaultApr);
+  const rewardApy = Math.max(
+    0,
+    (parsePercent(apyInfo.boostedApr) ?? 0) +
+      (parsePercent(apyInfo.stakingYieldApy) ?? 0) +
+      (parsePercent(apyInfo.treasuryApy) ?? 0) +
+      (parsePercent(apyInfo.underlyingApy) ?? 0),
+  );
+  const borrowApr = parsePercent(borrowInfo.apy);
+  const tokenSymbol = pool.token?.symbol || "USDC";
+  const decimals = pool.token?.decimals ?? 6;
+  const price = Number(pool.oracle?.price ?? pool.token?.price ?? 1);
+  const supplyAmount = parseScaledNaviAmount(pool.totalSupplyAmount, decimals);
+
+  return {
+    opportunity: {
+      id: `navi-${pool.uniqueId || pool.id}`,
+      protocol: "navi",
+      protocolName: PROTOCOL_NAMES.navi,
+      product: `${tokenSymbol} supply market`,
+      asset: tokenSymbol,
+      apr: totalApy === null ? null : apyToApr(totalApy),
+      apy: totalApy,
+      tvlUsd: numberOrNull(supplyAmount * price),
+      baseApy,
+      rewardApy,
+      borrowApr,
+      utilization: calculateUtilization(pool.totalSupplyAmount, pool.borrowedAmount),
+      exposure: "single",
+      ilRisk: "no",
+      source: "NAVI open-api",
+      poolId: pool.uniqueId || String(pool.id),
+      url: "https://app.naviprotocol.io/",
+      status: pool.status === "active" ? "live" : "partial",
+      note:
+        tokenSymbol === "USDC"
+          ? "Pulled from the same NAVI open-api pool fields used by the NAVI SDK."
+          : `NAVI returned ${tokenSymbol} as the active USDC-related market for this source.`,
+      rateBreakdown: buildNaviBreakdown(apyInfo, borrowInfo),
+    },
+    status: pool.status === "active" ? "live" : "partial",
+    warnings: [],
+  };
+}
+
+function fromAlphaLendMarket(market: AlphaLendMarketData, protocol: "alphafi" | "bluefin"): YieldOpportunity {
+  const baseApr = decimalToNumber(market.supplyApr.interestApr);
+  const stakingApr = decimalToNumber(market.supplyApr.stakingApr);
+  const rewardEntries = market.supplyApr.rewards.map((reward) => ({
+    label: `${coinSymbolFromType(reward.coinType)} reward APR`,
+    value: decimalToNumber(reward.rewardApr),
+    kind: coinSymbolFromType(reward.coinType).toLowerCase() === "stsui" ? "staking" : "reward",
+  })) satisfies YieldRateBreakdown[];
+  const rewardApr = rewardEntries.reduce((sum, entry) => sum + (entry.value ?? 0), 0);
+  const totalApr = baseApr + stakingApr + rewardApr;
+  const borrowBaseApr = decimalToNumber(market.borrowApr.interestApr);
+  const borrowRewardApr = market.borrowApr.rewards.reduce(
+    (sum, reward) => sum + decimalToNumber(reward.rewardApr),
+    0,
+  );
+  const borrowApr = borrowBaseApr - borrowRewardApr;
+  const totalSupply = decimalToNumber(market.totalSupply);
+  const price = decimalToNumber(market.price);
+  const isBluefin = protocol === "bluefin";
+
+  return {
+    id: `${protocol}-alphalend-usdc`,
     protocol,
     protocolName: PROTOCOL_NAMES[protocol],
-    product: pool.poolMeta ? `${fallbackProduct} ${pool.poolMeta}` : fallbackProduct,
-    asset: pool.symbol,
-    apr: apy === null ? null : apyToApr(apy),
-    apy,
-    tvlUsd: typeof pool.tvlUsd === "number" ? pool.tvlUsd : null,
-    baseApy: typeof pool.apyBase === "number" ? pool.apyBase : null,
-    rewardApy: typeof pool.apyReward === "number" ? pool.apyReward : null,
-    utilization: null,
-    exposure: pool.exposure || (pool.stablecoin ? "single" : "multi"),
-    ilRisk: pool.ilRisk || "unknown",
-    source: "DeFiLlama Yields",
-    poolId: pool.pool,
-    url: `https://defillama.com/yields/pool/${pool.pool}`,
+    product: isBluefin ? "Bluefin Lend USDC market" : "AlphaLend USDC market",
+    asset: "USDC",
+    apr: totalApr,
+    apy: aprToApy(totalApr),
+    tvlUsd: numberOrNull(totalSupply * price),
+    baseApy: baseApr,
+    rewardApy: rewardApr + stakingApr,
+    borrowApr,
+    utilization: decimalToNumber(market.utilizationRate) * 100,
+    exposure: "single",
+    ilRisk: "no",
+    source: isBluefin ? "AlphaLend SDK via Bluefin Lend" : "AlphaLend SDK",
+    poolId: String(market.marketId),
+    url: isBluefin ? "https://trade.bluefin.io/lend" : "https://alphafi.xyz/",
     status: "live",
-    note: buildDefiLlamaNote(pool),
+    note: isBluefin
+      ? "Bluefin Lend is documented as an AlphaFi collaboration; this uses the AlphaLend SDK USDC market."
+      : "Pulled from AlphaLend SDK getAllMarkets, including stSUI/reward APR components.",
+    rateBreakdown: [
+      { label: "Base supply APR", value: baseApr, kind: "base" },
+      ...(stakingApr > 0 ? [{ label: "Staking APR", value: stakingApr, kind: "staking" as const }] : []),
+      ...rewardEntries,
+      { label: "Net borrow APR", value: borrowApr, kind: "borrow" },
+    ],
   };
 }
 
@@ -325,6 +403,7 @@ function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpp
     tvlUsd: null,
     baseApy: null,
     rewardApy: null,
+    borrowApr: null,
     utilization: null,
     exposure: "unknown",
     ilRisk: "unknown",
@@ -332,92 +411,37 @@ function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpp
     poolId: null,
     url: null,
     status: "unavailable",
-    note: "No live USDC yield was returned by the configured source.",
+    note: "No live USDC lending data was returned by the configured protocol source.",
+    rateBreakdown: [],
   };
 }
 
-function isSuiUsdcPool(pool: DefiLlamaPool) {
-  if (pool.chain !== "Sui") return false;
-  const symbolHasUsdc = /\bW?USDC\b/i.test(pool.symbol);
-  const tokenHasNativeUsdc = pool.underlyingTokens?.some(
-    (token) => normalizeCoinType(token) === NATIVE_USDC_COIN_TYPE,
-  );
-  return Boolean(symbolHasUsdc || tokenHasNativeUsdc);
-}
+function selectNaviUsdcPool(pools: NaviPool[]) {
+  const active = pools.filter((pool) => pool.status === "active");
+  const nativeUsdc = active.find((pool) => normalizeCoinType(pool.suiCoinType) === NATIVE_USDC_COIN_TYPE);
+  if (nativeUsdc) return nativeUsdc;
 
-function selectSingleAssetPool(pools: DefiLlamaPool[], project: string) {
-  const projectPools = pools.filter((pool) => pool.project === project);
-  const exactNativeUsdc = projectPools.find(
-    (pool) =>
-      pool.symbol === "USDC" &&
-      pool.underlyingTokens?.some((token) => normalizeCoinType(token) === NATIVE_USDC_COIN_TYPE),
-  );
-
-  if (exactNativeUsdc) return exactNativeUsdc;
-  return selectBestPool(projectPools);
-}
-
-function selectBestPool(pools: DefiLlamaPool[]) {
-  return pools
-    .filter((pool) => typeof pool.apy === "number")
+  return active
+    .filter((pool) => /USDC/i.test(pool.token?.symbol ?? "") || /usdc/i.test(pool.suiCoinType))
     .sort((a, b) => {
-      const apyDelta = (b.apy ?? -1) - (a.apy ?? -1);
-      if (apyDelta !== 0) return apyDelta;
-      return (b.tvlUsd ?? 0) - (a.tvlUsd ?? 0);
+      const aNativeScore = normalizeCoinType(a.suiCoinType) === NATIVE_USDC_COIN_TYPE ? 1 : 0;
+      const bNativeScore = normalizeCoinType(b.suiCoinType) === NATIVE_USDC_COIN_TYPE ? 1 : 0;
+      if (aNativeScore !== bNativeScore) return bNativeScore - aNativeScore;
+      return Number(b.totalSupplyAmount ?? 0) - Number(a.totalSupplyAmount ?? 0);
     })[0];
 }
 
-function calculateAlphaFiSupplyMetrics(market: AlphaFiMarketValue) {
-  const totalLiquidityBase =
-    BigInt(market.balance_holding) +
-    BigInt(market.borrowed_amount) -
-    BigInt(market.unclaimed_spread_fee) -
-    BigInt(market.writeoff_amount) -
-    BigInt(market.unclaimed_spread_fee_protocol);
+function buildNaviBreakdown(supply: NaviApyInfo, borrow: NaviApyInfo): YieldRateBreakdown[] {
+  const entries: YieldRateBreakdown[] = [
+    { label: "Base supply APY", value: parsePercent(supply.vaultApr), kind: "base" },
+    { label: "Boosted reward APY", value: parsePercent(supply.boostedApr), kind: "reward" },
+    { label: "Staking yield APY", value: parsePercent(supply.stakingYieldApy), kind: "staking" },
+    { label: "Treasury APY", value: parsePercent(supply.treasuryApy), kind: "reward" },
+    { label: "Underlying APY", value: parsePercent(supply.underlyingApy), kind: "base" },
+    { label: "Borrow APY", value: parsePercent(borrow.apy), kind: "borrow" },
+  ];
 
-  const decimalDigit = Number(BigInt(market.decimal_digit.value) / ONE_E18);
-  const totalSupply = Number(totalLiquidityBase) / decimalDigit;
-  const borrowed = Number(market.borrowed_amount) / decimalDigit;
-  const utilization = totalSupply > 0 ? borrowed / totalSupply : 0;
-  const borrowApr = calculateAlphaFiBorrowApr(utilization, market.config);
-  const supplyApr =
-    borrowApr * utilization * (1 - Number(market.config.spread_fee_bps) / 10_000);
-
-  return {
-    totalSupply,
-    borrowed,
-    utilization,
-    borrowApr,
-    supplyApr,
-  };
-}
-
-function calculateAlphaFiBorrowApr(
-  utilization: number,
-  config: AlphaFiMarketValue["config"],
-) {
-  const kinks = Array.from(Buffer.from(config.interest_rate_kinks, "base64"));
-  const rates = config.interest_rates.map(Number);
-
-  if (kinks.length === 0) {
-    return (rates[0] ?? 0) / 10_000;
-  }
-
-  const utilizationPercentage = utilization * 100;
-  for (let index = 1; index < kinks.length; index += 1) {
-    if (utilizationPercentage >= kinks[index]) continue;
-
-    const leftApr = rates[index - 1] ?? 0;
-    const rightApr = rates[index] ?? leftApr;
-    const leftKink = kinks[index - 1] ?? 0;
-    const rightKink = kinks[index] ?? 100;
-    const interpolated =
-      leftApr + ((rightApr - leftApr) * (utilizationPercentage - leftKink)) / (rightKink - leftKink);
-
-    return interpolated / 100;
-  }
-
-  return (rates.at(-1) ?? 0) / 100;
+  return entries.filter((entry) => entry.value !== null && entry.value !== 0);
 }
 
 function dedupeByProtocol(opportunities: YieldOpportunity[]) {
@@ -438,20 +462,33 @@ function dedupeByProtocol(opportunities: YieldOpportunity[]) {
   return Array.from(byProtocol.values());
 }
 
-function buildDefiLlamaNote(pool: DefiLlamaPool) {
-  const parts = [
-    pool.apyPct1D === null || pool.apyPct1D === undefined
-      ? null
-      : `1d ${formatSigned(pool.apyPct1D)} pts`,
-    pool.apyPct7D === null || pool.apyPct7D === undefined
-      ? null
-      : `7d ${formatSigned(pool.apyPct7D)} pts`,
-    pool.apyMean30d === null || pool.apyMean30d === undefined
-      ? null
-      : `30d avg ${pool.apyMean30d.toFixed(2)}%`,
-  ].filter(Boolean);
+function calculateUtilization(totalSupplyAmount?: string, borrowedAmount?: string) {
+  const supply = Number(totalSupplyAmount ?? 0);
+  const borrowed = Number(borrowedAmount ?? 0);
+  if (!Number.isFinite(supply) || supply <= 0) return null;
+  return (borrowed / supply) * 100;
+}
 
-  return parts.length ? parts.join(" / ") : "Live Sui USDC yield pool.";
+function parseScaledNaviAmount(value: string | undefined, decimals: number) {
+  const raw = Number(value ?? 0);
+  if (!Number.isFinite(raw)) return 0;
+  return raw / 1_000_000_000 / 10 ** Math.max(decimals - 9, 0);
+}
+
+function decimalToNumber(value: DecimalLike | number | string | null | undefined) {
+  if (value === null || value === undefined) return 0;
+  const numeric = Number(typeof value === "object" ? value.toString() : value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function parsePercent(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function numberOrNull(value: number) {
+  return Number.isFinite(value) ? value : null;
 }
 
 function normalizeCoinType(coinType: string) {
@@ -465,6 +502,11 @@ function normalizeCoinType(coinType: string) {
     .join("<");
 }
 
+function coinSymbolFromType(coinType: string) {
+  const symbol = coinType.split("::").at(-1) ?? coinType;
+  return symbol.replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
 function apyToApr(apy: number) {
   return (Math.pow(1 + apy / 100, 1 / 365) - 1) * 365 * 100;
 }
@@ -476,10 +518,6 @@ function aprToApy(apr: number) {
 function normalizePercent(value: number | null) {
   if (value === null || !Number.isFinite(value)) return null;
   return Number(value.toFixed(4));
-}
-
-function formatSigned(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
 function errorMessage(error: unknown) {

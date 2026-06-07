@@ -5,7 +5,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LENDING_ACTION_LABELS, LENDING_ASSETS, PROTOCOL_CAPABILITIES } from "@/lib/lending/constants";
 import { lendingAdapters } from "@/lib/lending/adapters";
 import type { LendingAction, LendingAssetSymbol, LendingFormInput, LendingProtocolId, RewardRow } from "@/lib/lending/types";
-import type { DataQuality, ProtocolId, YieldApiResponse, YieldOpportunity } from "@/lib/yield-types";
+import type {
+  DataQuality,
+  PositionsApiResponse,
+  ProtocolId,
+  UserLendingPosition,
+  YieldApiResponse,
+  YieldOpportunity,
+} from "@/lib/yield-types";
 
 const CLIENT_REFRESH_INTERVAL_MS = 30_000;
 
@@ -33,9 +40,9 @@ const PROTOCOL_META: Record<
     label: "On-chain",
   },
   bluefin: {
-    accent: "#3E98C7",
-    glow: "shadow-[0_0_36px_rgba(62,152,199,0.16)]",
-    label: "LP",
+    accent: "#4BD8FF",
+    glow: "shadow-[0_0_36px_rgba(75,216,255,0.15)]",
+    label: "AlphaFi Lend",
   },
 };
 
@@ -43,8 +50,10 @@ const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   navi: "NAVI Protocol",
   scallop: "Scallop",
   alphafi: "AlphaFi",
-  bluefin: "Bluefin",
+  bluefin: "Bluefin Lend",
 };
+
+const PROTOCOL_TOTAL = Object.keys(PROTOCOL_META).length;
 
 const DEFAULT_LENDING_FORM: Omit<LendingFormInput, "address"> = {
   action: "deposit",
@@ -77,10 +86,14 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
 });
 
 export default function YieldDashboard() {
+  const account = useCurrentAccount();
   const [data, setData] = useState<YieldApiResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [positionsData, setPositionsData] = useState<PositionsApiResponse | null>(null);
+  const [isLoadingPositions, setIsLoadingPositions] = useState(false);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
 
   const refresh = useCallback(async (silent = false) => {
     if (silent) {
@@ -110,10 +123,62 @@ export default function YieldDashboard() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    const initialRefresh = window.setTimeout(() => {
+      void refresh();
+    }, 0);
     const interval = window.setInterval(() => refresh(true), CLIENT_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(interval);
+    };
   }, [refresh]);
+
+  const refreshPositions = useCallback(async (address: string, silent = false) => {
+    if (!silent) {
+      setIsLoadingPositions(true);
+    }
+    setPositionsError(null);
+
+    try {
+      const response = await fetch(`/api/positions?address=${encodeURIComponent(address)}`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`API ${response.status}`);
+      }
+
+      const payload = (await response.json()) as PositionsApiResponse;
+      setPositionsData(payload);
+    } catch (reason) {
+      setPositionsError(reason instanceof Error ? reason.message : "Failed to load wallet positions");
+    } finally {
+      setIsLoadingPositions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const address = account?.address ?? null;
+
+    const initialRefresh = window.setTimeout(() => {
+      if (!address) {
+        setPositionsData(null);
+        setPositionsError(null);
+        setIsLoadingPositions(false);
+        return;
+      }
+      void refreshPositions(address);
+    }, 0);
+    const interval = address
+      ? window.setInterval(() => refreshPositions(address, true), CLIENT_REFRESH_INTERVAL_MS)
+      : null;
+    return () => {
+      window.clearTimeout(initialRefresh);
+      if (interval !== null) {
+        window.clearInterval(interval);
+      }
+    };
+  }, [account?.address, refreshPositions]);
 
   const best = useMemo(() => {
     return data?.opportunities.find((item) => item.apy !== null) ?? null;
@@ -167,7 +232,7 @@ export default function YieldDashboard() {
               </div>
               <div className="rounded-lg border border-[#373A4D] bg-[#1c1e2c] px-3 py-2 text-right">
                 <p className="text-xs text-[#8585B8]">Live protocols</p>
-                <p className="mt-1 text-2xl font-semibold text-white">{liveCount}/4</p>
+                <p className="mt-1 text-2xl font-semibold text-white">{liveCount}/{PROTOCOL_TOTAL}</p>
               </div>
             </div>
 
@@ -202,14 +267,24 @@ export default function YieldDashboard() {
 
             <div className="mt-5 space-y-3">
               <SourceRow
-                label="DeFiLlama Yields"
-                status={data?.sources.defiLlama ?? "partial"}
-                value="NAVI / Scallop / Bluefin"
+                label="Scallop SDK"
+                status={data?.sources.scallopSdk ?? "partial"}
+                value="Scallop USDC market"
               />
               <SourceRow
-                label="Sui GraphQL"
-                status={data?.sources.suiGraphql ?? "partial"}
-                value="AlphaFi AlphaLend"
+                label="AlphaLend SDK"
+                status={data?.sources.alphaLendSdk ?? "partial"}
+                value="AlphaFi / Bluefin Lend"
+              />
+              <SourceRow
+                label="NAVI open-api"
+                status={data?.sources.naviOpenApi ?? "partial"}
+                value="NAVI pool fields"
+              />
+              <SourceRow
+                label="Bluefin Lend"
+                status={data?.sources.bluefinLend ?? "partial"}
+                value="AlphaFi collaboration"
               />
               <SourceRow
                 label="前端轮询"
@@ -231,6 +306,16 @@ export default function YieldDashboard() {
 
         <LendingWorkbench />
 
+        <PositionsPanel
+          address={account?.address ?? null}
+          data={positionsData}
+          error={positionsError}
+          loading={isLoadingPositions}
+          onRefresh={() => {
+            if (account?.address) void refreshPositions(account.address, true);
+          }}
+        />
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard key={opportunity.id} opportunity={opportunity} loading={isLoading && !data} />
@@ -243,16 +328,17 @@ export default function YieldDashboard() {
               <p className="text-sm text-[#8585B8]">APR / APY 明细</p>
               <h2 className="text-xl font-semibold text-white">USDC 收益列表</h2>
             </div>
-            <p className="text-sm text-[#a8a8c7]">AlphaFi 为链上计算；其它协议来自实时收益聚合源。</p>
+            <p className="text-sm text-[#a8a8c7]">Scallop / AlphaFi / Bluefin / NAVI 使用协议 SDK 或同源 API。</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] table-fixed text-left">
+            <table className="w-full min-w-[980px] table-fixed text-left">
               <thead className="text-xs uppercase text-[#8585B8]">
                 <tr className="border-b border-[#373A4D]">
                   <th className="w-[180px] px-4 py-3 font-medium">协议</th>
                   <th className="w-[220px] px-4 py-3 font-medium">产品</th>
                   <th className="w-[120px] px-4 py-3 text-right font-medium">APR</th>
                   <th className="w-[120px] px-4 py-3 text-right font-medium">APY</th>
+                  <th className="w-[180px] px-4 py-3 font-medium">加成明细</th>
                   <th className="w-[140px] px-4 py-3 text-right font-medium">TVL</th>
                   <th className="w-[130px] px-4 py-3 font-medium">风险</th>
                   <th className="w-[150px] px-4 py-3 font-medium">来源</th>
@@ -277,6 +363,7 @@ export default function YieldDashboard() {
                     <td className="px-4 py-4 text-right font-semibold text-[#9FFFBF]">
                       {formatPercent(item.apy)}
                     </td>
+                    <td className="px-4 py-4 text-sm text-[#dfdfed]">{breakdownLabel(item)}</td>
                     <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatCurrency(item.tvlUsd)}</td>
                     <td className="px-4 py-4 text-sm text-[#dfdfed]">{riskLabel(item)}</td>
                     <td className="px-4 py-4 text-sm text-[#a8a8c7]">{item.source}</td>
@@ -548,6 +635,129 @@ function LendingWorkbench() {
   );
 }
 
+function PositionsPanel({
+  address,
+  data,
+  error,
+  loading,
+  onRefresh,
+}: {
+  address: string | null;
+  data: PositionsApiResponse | null;
+  error: string | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const positions = data?.positions ?? [];
+
+  return (
+    <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
+      <div className="flex flex-col gap-3 border-b border-[#373A4D] p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-sm text-[#8585B8]">Wallet positions</p>
+          <h2 className="text-xl font-semibold text-white">协议仓位</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {data ? (
+            (Object.keys(PROTOCOL_META) as ProtocolId[]).map((protocol) => (
+              <StatusPill
+                key={`position-source-${protocol}`}
+                label={PROTOCOL_NAMES[protocol]}
+                value={QUALITY_LABEL[data.sources[protocol]]}
+                tone={data.sources[protocol] === "live" ? "green" : "yellow"}
+              />
+            ))
+          ) : null}
+          <button
+            className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#9FFFBF] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!address || loading}
+            onClick={onRefresh}
+            type="button"
+          >
+            {loading ? "查询中" : "刷新仓位"}
+          </button>
+        </div>
+      </div>
+
+      {!address ? (
+        <div className="p-4 text-sm text-[#a8a8c7]">连接钱包后显示 Scallop、AlphaFi、Bluefin Lend 和 NAVI 的协议仓位。</div>
+      ) : error ? (
+        <div className="p-4 text-sm text-[#FF4D29]">仓位加载失败：{error}</div>
+      ) : loading && !data ? (
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+          {skeletonPositions().map((position) => (
+            <PositionCard key={position.id} position={position} loading />
+          ))}
+        </div>
+      ) : positions.length ? (
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+          {positions.map((position) => (
+            <PositionCard key={position.id} position={position} loading={false} />
+          ))}
+        </div>
+      ) : (
+        <div className="p-4">
+          <p className="text-sm text-[#a8a8c7]">当前钱包没有查询到可展示的 Scallop / AlphaFi / Bluefin Lend 仓位。</p>
+          {data?.warnings[0] ? <p className="mt-2 text-sm text-[#FFEA4B]">{data.warnings[0]}</p> : null}
+        </div>
+      )}
+
+      {data?.warnings.length ? (
+        <div className="border-t border-[#373A4D] px-4 py-3 text-sm text-[#FFEA4B]">{data.warnings[0]}</div>
+      ) : null}
+    </section>
+  );
+}
+
+function PositionCard({ position, loading }: { position: UserLendingPosition; loading: boolean }) {
+  const meta = PROTOCOL_META[position.protocol];
+  return (
+    <article className="rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-white">{loading ? "--" : position.protocolName}</p>
+          <p className="mt-1 text-xs text-[#8585B8]">{loading ? "Loading" : position.source}</p>
+        </div>
+        <span
+          className="rounded-md border px-2 py-1 text-xs font-semibold"
+          style={{ borderColor: `${meta.accent}66`, color: meta.accent }}
+        >
+          {loading ? "--" : sideLabel(position.side)}
+        </span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-xs text-[#8585B8]">资产</p>
+          <p className="mt-1 truncate text-sm font-semibold text-white">{loading ? "--" : position.asset}</p>
+        </div>
+        <div>
+          <p className="text-xs text-[#8585B8]">APR</p>
+          <p className="mt-1 text-sm font-semibold text-[#FFEA4B]">{loading ? "--" : formatPercent(position.apr)}</p>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-xs text-[#8585B8]">数量</p>
+        <p className="mt-1 truncate text-lg font-semibold text-white">{loading ? "--" : position.amount}</p>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <p className="text-xs text-[#8585B8]">价值</p>
+          <p className="mt-1 font-semibold text-[#9FFFBF]">{loading ? "--" : formatCurrency(position.valueUsd)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-[#8585B8]">奖励</p>
+          <p className="mt-1 truncate font-semibold text-white">{loading ? "--" : rewardLabel(position)}</p>
+        </div>
+      </div>
+
+      <p className="mt-4 line-clamp-2 min-h-10 text-sm text-[#a8a8c7]">{loading ? "Loading" : position.note}</p>
+    </article>
+  );
+}
+
 function ProtocolCard({
   opportunity,
   loading,
@@ -600,6 +810,10 @@ function ProtocolCard({
           <p className="text-xs text-[#8585B8]">TVL</p>
           <p className="font-semibold text-white">{loading ? "--" : formatCurrency(opportunity.tvlUsd)}</p>
         </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-[#373A4D] bg-[#0f111b] p-3 text-xs text-[#a8a8c7]">
+        {loading ? "--" : breakdownLabel(opportunity)}
       </div>
 
       <p className="mt-4 min-h-10 text-sm text-[#a8a8c7]">{opportunity.product}</p>
@@ -703,6 +917,7 @@ function skeletonProtocols(): YieldOpportunity[] {
     tvlUsd: null,
     baseApy: null,
     rewardApy: null,
+    borrowApr: null,
     utilization: null,
     exposure: "unknown",
     ilRisk: "unknown",
@@ -711,6 +926,27 @@ function skeletonProtocols(): YieldOpportunity[] {
     url: null,
     status: "partial",
     note: "Loading",
+    rateBreakdown: [],
+  }));
+}
+
+function skeletonPositions(): UserLendingPosition[] {
+  return (Object.keys(PROTOCOL_META) as ProtocolId[]).map((protocol) => ({
+    id: `${protocol}-position-loading`,
+    protocol,
+    protocolName: PROTOCOL_NAMES[protocol],
+    product: "Loading",
+    asset: "--",
+    side: "supply",
+    amount: "--",
+    valueUsd: null,
+    apr: null,
+    rewards: [],
+    positionId: null,
+    url: null,
+    source: "Loading",
+    status: "partial",
+    note: "Loading wallet position",
   }));
 }
 
@@ -730,6 +966,24 @@ function formatDate(value: string | null | undefined) {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function sideLabel(side: UserLendingPosition["side"]) {
+  return side === "supply" ? "存款" : "借款";
+}
+
+function rewardLabel(position: UserLendingPosition) {
+  if (!position.rewards.length) return "--";
+  return position.rewards.map((reward) => `${reward.amount} ${reward.label}`).join(" / ");
+}
+
+function breakdownLabel(item: YieldOpportunity) {
+  const entries = item.rateBreakdown
+    .filter((entry) => entry.value !== null)
+    .filter((entry) => entry.kind !== "borrow")
+    .slice(0, 3);
+  if (!entries.length) return "--";
+  return entries.map((entry) => `${entry.label} ${formatPercent(entry.value)}`).join(" / ");
 }
 
 function riskLabel(item: YieldOpportunity) {
