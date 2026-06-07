@@ -23,3 +23,25 @@ button,
 a {
   -webkit-tap-highlight-color: transparent;
 }
+
+.control {
+  height: 2.5rem;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #373a4d;
+  background: #1c1e2c;
+  color: #fdfdff;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.control:focus {
+  border-color: #9fffbf;
+  box-shadow: 0 0 0 2px rgba(159, 255, 191, 0.12);
+}
+
+.control:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

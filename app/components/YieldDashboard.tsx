@@ -1,6 +1,10 @@
 "use client";
 
+import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { LENDING_ACTION_LABELS, LENDING_ASSETS, PROTOCOL_CAPABILITIES } from "@/lib/lending/constants";
+import { lendingAdapters } from "@/lib/lending/adapters";
+import type { LendingAction, LendingAssetSymbol, LendingFormInput, LendingProtocolId, RewardRow } from "@/lib/lending/types";
 import type { DataQuality, ProtocolId, YieldApiResponse, YieldOpportunity } from "@/lib/yield-types";
 
 const CLIENT_REFRESH_INTERVAL_MS = 30_000;
@@ -40,6 +44,18 @@ const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   scallop: "Scallop",
   alphafi: "AlphaFi",
   bluefin: "Bluefin",
+};
+
+const DEFAULT_LENDING_FORM: Omit<LendingFormInput, "address"> = {
+  action: "deposit",
+  alphalendPositionCapId: "",
+  amount: "",
+  asset: "USDC",
+  protocol: "alphalend",
+  scallopObligationId: "",
+  scallopObligationKeyId: "",
+  suilendObligationId: "",
+  suilendObligationOwnerCapId: "",
 };
 
 const QUALITY_LABEL: Record<DataQuality, string> = {
@@ -213,6 +229,8 @@ export default function YieldDashboard() {
           </div>
         </section>
 
+        <LendingWorkbench />
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard key={opportunity.id} opportunity={opportunity} loading={isLoading && !data} />
@@ -270,6 +288,263 @@ export default function YieldDashboard() {
         </section>
       </div>
     </main>
+  );
+}
+
+function LendingWorkbench() {
+  const account = useCurrentAccount();
+  const signAndExecute = useSignAndExecuteTransaction();
+  const [form, setForm] = useState(DEFAULT_LENDING_FORM);
+  const [status, setStatus] = useState<string>("选择协议、动作和资产后执行交易。");
+  const [rewards, setRewards] = useState<RewardRow[]>([]);
+  const [isQueryingRewards, setIsQueryingRewards] = useState(false);
+
+  const selectedProtocol = PROTOCOL_CAPABILITIES.find((item) => item.id === form.protocol) ?? PROTOCOL_CAPABILITIES[0];
+  const selectedAsset = LENDING_ASSETS[form.asset];
+  const canSubmit = Boolean(account?.address) && selectedProtocol.state !== "sdkBlocked" && !signAndExecute.isPending;
+
+  const updateForm = <Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) => {
+    setForm((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const execute = async () => {
+    if (!account?.address) {
+      setStatus("请先连接 Sui 钱包。");
+      return;
+    }
+
+    const adapter = lendingAdapters[form.protocol];
+    if (!adapter) {
+      setStatus("当前协议没有可用适配器。");
+      return;
+    }
+
+    try {
+      setStatus("正在用协议 SDK 构造交易...");
+      const { tx, summary } = await adapter.buildTransaction({
+        input: {
+          ...form,
+          address: account.address,
+        },
+      });
+
+      setStatus("等待钱包签名...");
+      const result = await signAndExecute.mutateAsync({
+        transaction: tx,
+      });
+
+      const digest = "digest" in result ? result.digest : undefined;
+      setStatus(digest ? `${summary} 已提交：${digest}` : `${summary} 已提交。`);
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : "交易构造或执行失败");
+    }
+  };
+
+  const queryRewards = async () => {
+    if (!account?.address) {
+      setStatus("请先连接 Sui 钱包。");
+      return;
+    }
+
+    try {
+      setIsQueryingRewards(true);
+      const rows = (
+        await Promise.all(
+          PROTOCOL_CAPABILITIES.filter((item) => item.state === "ready")
+            .map((item) => lendingAdapters[item.id]?.queryRewards?.(account.address) ?? Promise.resolve([])),
+        )
+      ).flat();
+      setRewards(rows);
+      setStatus(rows.length ? `查询到 ${rows.length} 条可展示激励。` : "当前未查询到可领取激励。");
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : "激励查询失败");
+    } finally {
+      setIsQueryingRewards(false);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
+      <div className="flex flex-col gap-3 border-b border-[#373A4D] p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-sm text-[#8585B8]">Lending execution</p>
+          <h2 className="text-xl font-semibold text-white">借贷聚合操作台</h2>
+        </div>
+        <ConnectButton />
+      </div>
+
+      <div className="grid gap-5 p-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="协议">
+            <select
+              className="control"
+              value={form.protocol}
+              onChange={(event) => updateForm("protocol", event.target.value as LendingProtocolId)}
+            >
+              {PROTOCOL_CAPABILITIES.map((protocol) => (
+                <option key={protocol.id} value={protocol.id}>
+                  {protocol.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="动作">
+            <select
+              className="control"
+              value={form.action}
+              onChange={(event) => updateForm("action", event.target.value as LendingAction)}
+            >
+              {selectedProtocol.actions.map((action) => (
+                <option key={action} value={action}>
+                  {LENDING_ACTION_LABELS[action]}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="资产">
+            <select
+              className="control"
+              value={form.asset}
+              onChange={(event) => updateForm("asset", event.target.value as LendingAssetSymbol)}
+              disabled={form.action === "claimRewards"}
+            >
+              {Object.values(LENDING_ASSETS).map((asset) => (
+                <option key={asset.symbol} value={asset.symbol}>
+                  {asset.symbol}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label={`金额 ${selectedAsset.symbol}`}>
+            <input
+              className="control"
+              inputMode="decimal"
+              placeholder={form.action === "claimRewards" ? "领取激励无需金额" : "0.00"}
+              value={form.amount}
+              onChange={(event) => updateForm("amount", event.target.value)}
+              disabled={form.action === "claimRewards"}
+            />
+          </Field>
+
+          {form.protocol === "alphalend" ? (
+            <Field label="AlphaLend Position Cap ID" wide>
+              <input
+                className="control"
+                placeholder="0x..."
+                value={form.alphalendPositionCapId}
+                onChange={(event) => updateForm("alphalendPositionCapId", event.target.value)}
+              />
+            </Field>
+          ) : null}
+
+          {form.protocol === "scallop" ? (
+            <>
+              <Field label="Scallop Obligation ID">
+                <input
+                  className="control"
+                  placeholder="0x..."
+                  value={form.scallopObligationId}
+                  onChange={(event) => updateForm("scallopObligationId", event.target.value)}
+                />
+              </Field>
+              <Field label="Scallop Obligation Key ID">
+                <input
+                  className="control"
+                  placeholder="0x..."
+                  value={form.scallopObligationKeyId}
+                  onChange={(event) => updateForm("scallopObligationKeyId", event.target.value)}
+                />
+              </Field>
+            </>
+          ) : null}
+
+          {form.protocol === "suilend" ? (
+            <>
+              <Field label="Suilend Obligation ID">
+                <input
+                  className="control"
+                  placeholder="0x..."
+                  value={form.suilendObligationId}
+                  onChange={(event) => updateForm("suilendObligationId", event.target.value)}
+                />
+              </Field>
+              <Field label="Suilend Owner Cap ID">
+                <input
+                  className="control"
+                  placeholder="0x..."
+                  value={form.suilendObligationOwnerCapId}
+                  onChange={(event) => updateForm("suilendObligationOwnerCapId", event.target.value)}
+                />
+              </Field>
+            </>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col gap-4 rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-white">{selectedProtocol.name}</p>
+              <span
+                className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                  selectedProtocol.state === "ready"
+                    ? "border-[#9FFFBF]/35 bg-[#9FFFBF]/10 text-[#9FFFBF]"
+                    : "border-[#FFEA4B]/35 bg-[#FFEA4B]/10 text-[#FFEA4B]"
+                }`}
+              >
+                {selectedProtocol.state === "ready" ? "SDK ready" : "SDK blocked"}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-[#a8a8c7]">{selectedProtocol.description}</p>
+            {selectedProtocol.warning ? <p className="mt-2 text-sm text-[#FFEA4B]">{selectedProtocol.warning}</p> : null}
+          </div>
+
+          <div className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
+            <p className="text-xs text-[#8585B8]">钱包地址</p>
+            <p className="mt-1 break-all text-sm font-medium text-white">{account?.address ?? "未连接"}</p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="h-10 rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-4 text-sm font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canSubmit}
+              onClick={execute}
+              type="button"
+            >
+              {signAndExecute.isPending ? "执行中" : "构造并签名执行"}
+            </button>
+            <button
+              className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#7F7FFF] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!account?.address || isQueryingRewards}
+              onClick={queryRewards}
+              type="button"
+            >
+              {isQueryingRewards ? "查询中" : "查询激励"}
+            </button>
+          </div>
+
+          <p className="min-h-10 rounded-lg border border-[#373A4D] bg-[#151722] p-3 text-sm text-[#dfdfed]">{status}</p>
+
+          {rewards.length ? (
+            <div className="space-y-2">
+              {rewards.map((reward, index) => (
+                <div key={`${reward.protocol}-${reward.label}-${index}`} className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
+                  <p className="text-sm font-semibold text-white">{reward.label}</p>
+                  <p className="mt-1 break-all text-xs text-[#a8a8c7]">
+                    {reward.amount} {reward.coinType ?? ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -396,6 +671,23 @@ function SourceRow({
       </div>
       <QualityBadge status={status} />
     </div>
+  );
+}
+
+function Field({
+  children,
+  label,
+  wide = false,
+}: {
+  children: React.ReactNode;
+  label: string;
+  wide?: boolean;
+}) {
+  return (
+    <label className={`flex flex-col gap-2 ${wide ? "md:col-span-2" : ""}`}>
+      <span className="text-xs font-medium text-[#8585B8]">{label}</span>
+      {children}
+    </label>
   );
 }
 

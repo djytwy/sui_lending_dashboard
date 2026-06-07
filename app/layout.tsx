@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import "@mysten/dapp-kit/dist/index.css";
 import "./globals.css";
+import Providers from "./components/Providers";
 
 export const metadata: Metadata = {
   title: "Sui USDC Yield Dashboard",
@@ -16,7 +18,9 @@ export default function RootLayout({
       lang="zh-CN"
       className="h-full antialiased"
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

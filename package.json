@@ -9,7 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@alphafi/alphalend-sdk": "^3.0.1",
+    "@mysten/bcs": "^2.0.1",
+    "@mysten/dapp-kit": "^1.0.6",
     "@mysten/sui": "^2.17.0",
+    "@naviprotocol/lending": "^1.4.6",
+    "@scallop-io/sui-scallop-sdk": "^3.0.2",
+    "@suilend/sdk": "^2.0.7",
+    "@suilend/sui-fe": "^3.0.6",
+    "@tanstack/react-query": "^5.101.0",
     "next": "16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
