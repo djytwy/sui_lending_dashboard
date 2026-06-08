@@ -1,5 +1,0 @@
-allowBuilds:
-  sharp: false
-  unrs-resolver: false
-minimumReleaseAgeExclude:
-  - '@suilend/sui-fe@3.0.6'
