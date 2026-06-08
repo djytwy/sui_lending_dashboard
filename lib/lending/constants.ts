@@ -28,16 +28,16 @@ export const LENDING_ACTION_LABELS: Record<LendingAction, string> = {
 
 export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   {
-    id: "alphalend",
-    name: "AlphaLend",
-    sdkPackage: "@alphafi/alphalend-sdk",
+    id: "bluefin",
+    name: "Bluefin Lend",
+    sdkPackage: "Bluefin Lend market SDK source",
     state: "ready",
     actions: ["deposit", "borrow", "repay", "claimRewards"],
-    description: "通过 AlphaLend SDK 构造 supply / borrow / repay / claimRewards 交易。",
+    description: "通过 Bluefin Lend 市场源构造 supply / borrow / repay / claimRewards 交易。",
     requiredFields: {
-      borrow: ["AlphaLend Position Cap ID"],
-      repay: ["AlphaLend Position Cap ID"],
-      claimRewards: ["AlphaLend Position Cap ID"],
+      borrow: ["Bluefin Position Cap ID"],
+      repay: ["Bluefin Position Cap ID"],
+      claimRewards: ["Bluefin Position Cap ID"],
     },
   },
   {
@@ -52,22 +52,6 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
       repay: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
       claimRewards: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
     },
-  },
-  {
-    id: "suilend",
-    name: "Suilend",
-    sdkPackage: "@suilend/sdk",
-    state: "sdkBlocked",
-    actions: ["deposit", "borrow", "repay", "claimRewards"],
-    description: "SDK 已安装，但当前 npm 包的 ESM 子路径解析在本项目中阻塞运行时导入。",
-    requiredFields: {
-      deposit: ["Suilend Obligation Owner Cap ID"],
-      borrow: ["Suilend Obligation ID", "Suilend Obligation Owner Cap ID"],
-      repay: ["Suilend Obligation ID"],
-      claimRewards: ["Suilend Obligation Owner Cap ID"],
-    },
-    warning:
-      "@suilend/sdk@2.0.7 在 Node/Next ESM 解析下存在 extensionless 子路径导入问题；不要在主 bundle 直接导入根入口。",
   },
   {
     id: "navi",

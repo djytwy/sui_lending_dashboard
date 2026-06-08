@@ -91,11 +91,11 @@ async function buildScallopTransaction({
   };
 }
 
-async function buildAlphalendTransaction({
+async function buildBluefinTransaction({
   input,
 }: AdapterContext): Promise<BuildLendingTransactionResult> {
-  const { AlphalendClient } = await import("@alphafi/alphalend-sdk");
-  const client = new AlphalendClient("mainnet");
+  const { AlphalendClient: BluefinLendClient } = await import("@alphafi/alphalend-sdk");
+  const client = new BluefinLendClient("mainnet");
   const asset = getAsset(input.asset);
   const amount = requireAmount(input);
 
@@ -103,7 +103,7 @@ async function buildAlphalendTransaction({
   const market = markets?.find((item) => item.coinType === asset.coinType);
   const marketId = market?.marketId?.toString();
   if (!marketId) {
-    throw new Error(`AlphaLend 未找到 ${input.asset} 市场`);
+    throw new Error(`Bluefin Lend 未找到 ${input.asset} 市场`);
   }
 
   let tx: Transaction | undefined;
@@ -113,7 +113,7 @@ async function buildAlphalendTransaction({
       amount,
       coinType: asset.coinType,
       marketId,
-      positionCapId: input.alphalendPositionCapId.trim() || undefined,
+      positionCapId: input.bluefinPositionCapId.trim() || undefined,
     });
   } else if (input.action === "borrow") {
     tx = await client.borrow({
@@ -121,7 +121,7 @@ async function buildAlphalendTransaction({
       amount,
       coinType: asset.coinType,
       marketId,
-      positionCapId: requireField(input.alphalendPositionCapId, "AlphaLend Position Cap ID"),
+      positionCapId: requireField(input.bluefinPositionCapId, "Bluefin Position Cap ID"),
       priceUpdateCoinTypes: [asset.coinType],
     });
   } else if (input.action === "repay") {
@@ -130,19 +130,19 @@ async function buildAlphalendTransaction({
       amount,
       coinType: asset.coinType,
       marketId,
-      positionCapId: requireField(input.alphalendPositionCapId, "AlphaLend Position Cap ID"),
+      positionCapId: requireField(input.bluefinPositionCapId, "Bluefin Position Cap ID"),
     });
   } else {
     tx = await client.claimRewards({
       address: input.address,
       claimAndDepositAll: true,
       claimAndDepositAlpha: true,
-      positionCapId: requireField(input.alphalendPositionCapId, "AlphaLend Position Cap ID"),
+      positionCapId: requireField(input.bluefinPositionCapId, "Bluefin Position Cap ID"),
     });
   }
 
   if (!tx) {
-    throw new Error("AlphaLend SDK 未返回交易，可能没有可执行的仓位或奖励");
+    throw new Error("Bluefin Lend 未返回交易，可能没有可执行的仓位或奖励");
   }
 
   tx.setSenderIfNotSet(input.address);
@@ -150,20 +150,20 @@ async function buildAlphalendTransaction({
 
   return {
     tx,
-    summary: `AlphaLend ${LENDING_ACTION_LABELS[input.action]} ${input.action === "claimRewards" ? "" : `${input.amount} ${input.asset}`}`,
+    summary: `Bluefin Lend ${LENDING_ACTION_LABELS[input.action]} ${input.action === "claimRewards" ? "" : `${input.amount} ${input.asset}`}`,
   };
 }
 
-async function queryAlphalendRewards(address: string): Promise<RewardRow[]> {
-  const { AlphalendClient } = await import("@alphafi/alphalend-sdk");
-  const client = new AlphalendClient("mainnet");
+async function queryBluefinRewards(address: string): Promise<RewardRow[]> {
+  const { AlphalendClient: BluefinLendClient } = await import("@alphafi/alphalend-sdk");
+  const client = new BluefinLendClient("mainnet");
   const portfolios = await client.getUserPortfolio(address);
 
   return (
     portfolios?.flatMap((portfolio) =>
       portfolio.rewardsToClaim.map((reward) => ({
-        protocol: "alphalend" as const,
-        label: "AlphaLend reward",
+        protocol: "bluefin" as const,
+        label: "Bluefin Lend reward",
         amount: reward.rewardAmount.toString(),
         coinType: reward.coinType,
       })),
@@ -197,14 +197,13 @@ async function queryScallopRewards(address: string): Promise<RewardRow[]> {
 }
 
 export const lendingAdapters: Record<string, ProtocolAdapter> = {
-  alphalend: {
-    buildTransaction: buildAlphalendTransaction,
-    queryRewards: queryAlphalendRewards,
+  bluefin: {
+    buildTransaction: buildBluefinTransaction,
+    queryRewards: queryBluefinRewards,
   },
   scallop: {
     buildTransaction: buildScallopTransaction,
     queryRewards: queryScallopRewards,
   },
-  suilend: unsupportedAdapter("suilend"),
   navi: unsupportedAdapter("navi"),
 };

@@ -6,34 +6,36 @@ import {
   type UserLendingPosition,
 } from "./yield-types";
 
-const ALPHALEND_CACHE_TTL_MS = 60_000;
+const BLUEFIN_LEND_CACHE_TTL_MS = 60_000;
 const POSITION_SOURCE_TIMEOUT_MS = 20_000;
+const NATIVE_USDC_COIN_TYPE =
+  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
 
 type DecimalLike = {
   toString: () => string;
 };
 
-type AlphaLendRewardApr = {
+type BluefinLendRewardApr = {
   coinType: string;
   rewardApr: DecimalLike | number | string;
 };
 
-type AlphaLendMarketData = {
+type BluefinLendMarketData = {
   marketId: string | number;
   coinType: string;
   price: DecimalLike | number | string;
   supplyApr: {
     interestApr: DecimalLike | number | string;
     stakingApr: DecimalLike | number | string;
-    rewards: AlphaLendRewardApr[];
+    rewards: BluefinLendRewardApr[];
   };
   borrowApr: {
     interestApr: DecimalLike | number | string;
-    rewards: AlphaLendRewardApr[];
+    rewards: BluefinLendRewardApr[];
   };
 };
 
-type AlphaLendPortfolio = {
+type BluefinLendPortfolio = {
   positionId: string;
   suppliedAmounts: Map<number, DecimalLike | number | string>;
   borrowedAmounts: Map<number, DecimalLike | number | string>;
@@ -97,7 +99,6 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
   const sources: Record<ProtocolId, DataQuality> = {
     navi: "unavailable",
     scallop: "unavailable",
-    alphafi: "unavailable",
     bluefin: "unavailable",
   };
 
@@ -111,20 +112,19 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
     };
   }
 
-  const [alphaLendResult, scallopResult] = await Promise.allSettled([
-    withTimeout(fetchAlphaLendPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "AlphaLend positions"),
+  const [bluefinResult, scallopResult] = await Promise.allSettled([
+    withTimeout(fetchBluefinLendPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "Bluefin Lend positions"),
     withTimeout(fetchScallopPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "Scallop positions"),
   ]);
 
   const positions: UserLendingPosition[] = [];
 
-  if (alphaLendResult.status === "fulfilled") {
-    sources.alphafi = alphaLendResult.value.status;
-    sources.bluefin = alphaLendResult.value.status;
-    positions.push(...alphaLendResult.value.positions);
-    warnings.push(...alphaLendResult.value.warnings);
+  if (bluefinResult.status === "fulfilled") {
+    sources.bluefin = bluefinResult.value.status;
+    positions.push(...bluefinResult.value.positions);
+    warnings.push(...bluefinResult.value.warnings);
   } else {
-    warnings.push(`AlphaLend positions failed: ${errorMessage(alphaLendResult.reason)}`);
+    warnings.push(`Bluefin Lend positions failed: ${errorMessage(bluefinResult.reason)}`);
   }
 
   if (scallopResult.status === "fulfilled") {
@@ -142,42 +142,37 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
   return {
     generatedAt: new Date().toISOString(),
     address: normalizedAddress,
-    positions: positions.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)),
+    positions: positions.filter(isUsdcPosition).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)),
     sources,
     warnings,
   };
 }
 
-async function fetchAlphaLendPositions(address: string): Promise<{
+async function fetchBluefinLendPositions(address: string): Promise<{
   positions: UserLendingPosition[];
   status: DataQuality;
   warnings: string[];
 }> {
-  const { AlphalendClient } = await import("@alphafi/alphalend-sdk");
-  const client = new AlphalendClient("mainnet");
+  const { AlphalendClient: BluefinLendClient } = await import("@alphafi/alphalend-sdk");
+  const client = new BluefinLendClient("mainnet");
   const [markets, portfolios] = await Promise.all([
-    client.getAllMarkets({ useCache: true, cacheTTL: ALPHALEND_CACHE_TTL_MS }),
+    client.getAllMarkets({ useCache: true, cacheTTL: BLUEFIN_LEND_CACHE_TTL_MS }),
     client.getUserPortfolio(address),
   ]);
 
-  const marketMap = new Map<number, AlphaLendMarketData>();
-  for (const market of ((markets ?? []) as AlphaLendMarketData[])) {
+  const marketMap = new Map<number, BluefinLendMarketData>();
+  for (const market of ((markets ?? []) as BluefinLendMarketData[])) {
     marketMap.set(Number(market.marketId), market);
   }
 
-  const alphaPositions = ((portfolios ?? []) as AlphaLendPortfolio[]).flatMap((portfolio) =>
-    buildAlphaLendPortfolioRows(portfolio, marketMap, "alphafi"),
-  );
-  const bluefinPositions = ((portfolios ?? []) as AlphaLendPortfolio[]).flatMap((portfolio) =>
-    buildAlphaLendPortfolioRows(portfolio, marketMap, "bluefin"),
+  const bluefinPositions = ((portfolios ?? []) as BluefinLendPortfolio[]).flatMap((portfolio) =>
+    buildBluefinLendPortfolioRows(portfolio, marketMap),
   );
 
   return {
-    positions: [...alphaPositions, ...bluefinPositions],
+    positions: bluefinPositions,
     status: "live",
-    warnings: [
-      "Bluefin Lend positions are displayed from AlphaLend SDK because Bluefin documents the lend product as an AlphaFi collaboration.",
-    ],
+    warnings: [],
   };
 }
 
@@ -203,7 +198,7 @@ async function fetchScallopPositions(address: string): Promise<{
 
   if (lendingsResult.status === "fulfilled") {
     for (const lending of Object.values(lendingsResult.value)) {
-      if (!lending || lending.suppliedCoin <= 0) continue;
+      if (!lending || lending.suppliedCoin <= 0 || !isScallopUsdcAsset(lending.symbol, lending.coinName)) continue;
       positions.push({
         id: `scallop-lending-${lending.coinName}`,
         protocol: "scallop",
@@ -236,7 +231,7 @@ async function fetchScallopPositions(address: string): Promise<{
     for (const account of Object.values(obligationAccountsResult.value)) {
       if (!account) continue;
       for (const collateral of Object.values(account.collaterals ?? {})) {
-        if (!collateral || collateral.depositedCoin <= 0) continue;
+        if (!collateral || collateral.depositedCoin <= 0 || !isScallopUsdcAsset(collateral.symbol, collateral.coinName)) continue;
         positions.push({
           id: `scallop-collateral-${account.obligationId}-${collateral.coinName}`,
           protocol: "scallop",
@@ -257,7 +252,7 @@ async function fetchScallopPositions(address: string): Promise<{
       }
 
       for (const debt of Object.values(account.debts ?? {})) {
-        if (!debt || debt.borrowedCoin <= 0) continue;
+        if (!debt || debt.borrowedCoin <= 0 || !isScallopUsdcAsset(debt.symbol, debt.coinName)) continue;
         const rewardApr = (debt.rewards ?? []).reduce(
           (sum, reward) => sum + (reward.boostedRewardApr ?? reward.baseRewardApr ?? 0),
           0,
@@ -298,10 +293,9 @@ async function fetchScallopPositions(address: string): Promise<{
   };
 }
 
-function buildAlphaLendPortfolioRows(
-  portfolio: AlphaLendPortfolio,
-  marketMap: Map<number, AlphaLendMarketData>,
-  protocol: "alphafi" | "bluefin",
+function buildBluefinLendPortfolioRows(
+  portfolio: BluefinLendPortfolio,
+  marketMap: Map<number, BluefinLendMarketData>,
 ) {
   const rows: UserLendingPosition[] = [];
   const rewards = portfolio.rewardsToClaim.map((reward) => ({
@@ -309,64 +303,59 @@ function buildAlphaLendPortfolioRows(
     amount: decimalToNumber(reward.rewardAmount).toString(),
     coinType: reward.coinType,
   }));
-  const isBluefin = protocol === "bluefin";
 
   for (const [marketId, amountValue] of portfolio.suppliedAmounts.entries()) {
     const amount = decimalToNumber(amountValue);
     const market = marketMap.get(marketId);
-    if (!market || amount <= 0) continue;
+    if (!market || amount <= 0 || !isNativeUsdcCoinType(market.coinType)) continue;
     const price = decimalToNumber(market.price);
     rows.push({
-      id: `${protocol}-${portfolio.positionId}-supply-${marketId}`,
-      protocol,
-      protocolName: PROTOCOL_NAMES[protocol],
+      id: `bluefin-${portfolio.positionId}-supply-${marketId}`,
+      protocol: "bluefin",
+      protocolName: PROTOCOL_NAMES.bluefin,
       product: `${coinSymbolFromType(market.coinType)} supply`,
       asset: coinSymbolFromType(market.coinType),
       side: "supply",
       amount: formatAmount(amount),
       valueUsd: numberOrNull(amount * price),
-      apr: alphaSupplyApr(market),
+      apr: bluefinSupplyApr(market),
       rewards,
       positionId: portfolio.positionId,
-      url: isBluefin ? "https://trade.bluefin.io/lend" : "https://alphafi.xyz/",
-      source: isBluefin ? "AlphaLend SDK via Bluefin Lend" : "AlphaLend SDK",
+      url: "https://trade.bluefin.io/lend",
+      source: "Bluefin Lend position source",
       status: "live",
-      note: isBluefin
-        ? "Same underlying AlphaLend position surfaced by Bluefin Lend."
-        : "AlphaLend supplied collateral position.",
+      note: "Bluefin Lend supplied collateral position.",
     });
   }
 
   for (const [marketId, amountValue] of portfolio.borrowedAmounts.entries()) {
     const amount = decimalToNumber(amountValue);
     const market = marketMap.get(marketId);
-    if (!market || amount <= 0) continue;
+    if (!market || amount <= 0 || !isNativeUsdcCoinType(market.coinType)) continue;
     const price = decimalToNumber(market.price);
     rows.push({
-      id: `${protocol}-${portfolio.positionId}-borrow-${marketId}`,
-      protocol,
-      protocolName: PROTOCOL_NAMES[protocol],
+      id: `bluefin-${portfolio.positionId}-borrow-${marketId}`,
+      protocol: "bluefin",
+      protocolName: PROTOCOL_NAMES.bluefin,
       product: `${coinSymbolFromType(market.coinType)} borrow`,
       asset: coinSymbolFromType(market.coinType),
       side: "borrow",
       amount: formatAmount(amount),
       valueUsd: numberOrNull(amount * price),
-      apr: alphaBorrowApr(market),
+      apr: bluefinBorrowApr(market),
       rewards,
       positionId: portfolio.positionId,
-      url: isBluefin ? "https://trade.bluefin.io/lend" : "https://alphafi.xyz/",
-      source: isBluefin ? "AlphaLend SDK via Bluefin Lend" : "AlphaLend SDK",
+      url: "https://trade.bluefin.io/lend",
+      source: "Bluefin Lend position source",
       status: "live",
-      note: isBluefin
-        ? "Same underlying AlphaLend borrow surfaced by Bluefin Lend."
-        : "AlphaLend borrowed asset position.",
+      note: "Bluefin Lend borrowed asset position.",
     });
   }
 
   return rows;
 }
 
-function alphaSupplyApr(market: AlphaLendMarketData) {
+function bluefinSupplyApr(market: BluefinLendMarketData) {
   return (
     decimalToNumber(market.supplyApr.interestApr) +
     decimalToNumber(market.supplyApr.stakingApr) +
@@ -374,7 +363,7 @@ function alphaSupplyApr(market: AlphaLendMarketData) {
   );
 }
 
-function alphaBorrowApr(market: AlphaLendMarketData) {
+function bluefinBorrowApr(market: BluefinLendMarketData) {
   return (
     decimalToNumber(market.borrowApr.interestApr) -
     market.borrowApr.rewards.reduce((sum, reward) => sum + decimalToNumber(reward.rewardApr), 0)
@@ -413,6 +402,33 @@ function coinSymbolFromType(coinType: string) {
   if (coinType.includes("DEEPBOOK_STAKED")) return "DB-USDC";
   const symbol = coinType.split("::").at(-1) ?? coinType;
   return symbol.replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+function isUsdcPosition(position: UserLendingPosition) {
+  return isUsdcSymbol(position.asset);
+}
+
+function isScallopUsdcAsset(symbol: string | undefined, coinName: string | undefined) {
+  return isUsdcSymbol(symbol) || coinName?.trim().toLowerCase() === "usdc";
+}
+
+function isNativeUsdcCoinType(coinType: string) {
+  return normalizeCoinType(coinType) === NATIVE_USDC_COIN_TYPE;
+}
+
+function isUsdcSymbol(symbol: string | undefined) {
+  return symbol?.trim().toUpperCase() === "USDC";
+}
+
+function normalizeCoinType(coinType: string) {
+  if (coinType.startsWith("0x")) return coinType;
+  return coinType
+    .split("<")
+    .map((segment) => {
+      if (!segment || segment.startsWith("0x")) return segment;
+      return `0x${segment}`;
+    })
+    .join("<");
 }
 
 function errorMessage(error: unknown) {

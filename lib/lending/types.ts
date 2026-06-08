@@ -1,6 +1,6 @@
 import type { Transaction } from "@mysten/sui/transactions";
 
-export type LendingProtocolId = "suilend" | "navi" | "scallop" | "alphalend";
+export type LendingProtocolId = "navi" | "scallop" | "bluefin";
 
 export type LendingAction = "deposit" | "borrow" | "repay" | "claimRewards";
 
@@ -32,11 +32,9 @@ export type LendingFormInput = {
   asset: LendingAssetSymbol;
   amount: string;
   address: string;
-  suilendObligationId: string;
-  suilendObligationOwnerCapId: string;
   scallopObligationId: string;
   scallopObligationKeyId: string;
-  alphalendPositionCapId: string;
+  bluefinPositionCapId: string;
 };
 
 export type RewardRow = {

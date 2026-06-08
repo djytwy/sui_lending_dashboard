@@ -12,18 +12,18 @@ const NATIVE_USDC_COIN_TYPE =
   "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
 const NAVI_POOLS_URL =
   "https://open-api.naviprotocol.io/api/navi/pools?env=prod&sdk=1.4.6&market=main";
-const ALPHALEND_CACHE_TTL_MS = 60_000;
+const BLUEFIN_LEND_CACHE_TTL_MS = 60_000;
 
 type DecimalLike = {
   toString: () => string;
 };
 
-type AlphaLendRewardApr = {
+type BluefinLendRewardApr = {
   coinType: string;
   rewardApr: DecimalLike | number | string;
 };
 
-type AlphaLendMarketData = {
+type BluefinLendMarketData = {
   marketId: string | number;
   coinType: string;
   decimalDigit: number;
@@ -34,11 +34,11 @@ type AlphaLendMarketData = {
   supplyApr: {
     interestApr: DecimalLike | number | string;
     stakingApr: DecimalLike | number | string;
-    rewards: AlphaLendRewardApr[];
+    rewards: BluefinLendRewardApr[];
   };
   borrowApr: {
     interestApr: DecimalLike | number | string;
-    rewards: AlphaLendRewardApr[];
+    rewards: BluefinLendRewardApr[];
   };
 };
 
@@ -94,15 +94,14 @@ type NaviPoolsResponse = {
 
 export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   const warnings: string[] = [];
-  const [scallopResult, alphaLendResult, naviResult] = await Promise.allSettled([
+  const [scallopResult, bluefinResult, naviResult] = await Promise.allSettled([
     fetchScallopUsdcOpportunity(),
-    fetchAlphaLendUsdcOpportunities(),
+    fetchBluefinLendUsdcOpportunity(),
     fetchNaviUsdcOpportunity(),
   ]);
 
   const opportunities: YieldOpportunity[] = [];
   let scallopSdk: DataQuality = "unavailable";
-  let alphaLendSdk: DataQuality = "unavailable";
   let naviOpenApi: DataQuality = "unavailable";
   let bluefinLend: DataQuality = "unavailable";
 
@@ -115,14 +114,12 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
     opportunities.push(unavailableOpportunity("scallop", "Scallop USDC lending pool"));
   }
 
-  if (alphaLendResult.status === "fulfilled") {
-    alphaLendSdk = alphaLendResult.value.status;
-    bluefinLend = alphaLendResult.value.status;
-    opportunities.push(...alphaLendResult.value.opportunities);
-    warnings.push(...alphaLendResult.value.warnings);
+  if (bluefinResult.status === "fulfilled") {
+    bluefinLend = bluefinResult.value.status;
+    opportunities.push(bluefinResult.value.opportunity);
+    warnings.push(...bluefinResult.value.warnings);
   } else {
-    warnings.push(`AlphaLend SDK source failed: ${errorMessage(alphaLendResult.reason)}`);
-    opportunities.push(unavailableOpportunity("alphafi", "AlphaLend USDC market"));
+    warnings.push(`Bluefin Lend source failed: ${errorMessage(bluefinResult.reason)}`);
     opportunities.push(unavailableOpportunity("bluefin", "Bluefin Lend USDC market"));
   }
 
@@ -159,7 +156,6 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
     opportunities: deduped,
     sources: {
       scallopSdk,
-      alphaLendSdk,
       naviOpenApi,
       bluefinLend,
     },
@@ -227,17 +223,17 @@ async function fetchScallopUsdcOpportunity(): Promise<{
   };
 }
 
-async function fetchAlphaLendUsdcOpportunities(): Promise<{
-  opportunities: YieldOpportunity[];
+async function fetchBluefinLendUsdcOpportunity(): Promise<{
+  opportunity: YieldOpportunity;
   status: DataQuality;
   warnings: string[];
 }> {
-  const { AlphalendClient } = await import("@alphafi/alphalend-sdk");
-  const client = new AlphalendClient("mainnet");
+  const { AlphalendClient: BluefinLendClient } = await import("@alphafi/alphalend-sdk");
+  const client = new BluefinLendClient("mainnet");
   const markets = ((await client.getAllMarkets({
     useCache: true,
-    cacheTTL: ALPHALEND_CACHE_TTL_MS,
-  })) ?? []) as AlphaLendMarketData[];
+    cacheTTL: BLUEFIN_LEND_CACHE_TTL_MS,
+  })) ?? []) as BluefinLendMarketData[];
 
   const usdcMarket = markets.find(
     (market) => normalizeCoinType(market.coinType) === NATIVE_USDC_COIN_TYPE,
@@ -245,24 +241,16 @@ async function fetchAlphaLendUsdcOpportunities(): Promise<{
 
   if (!usdcMarket) {
     return {
-      opportunities: [
-        unavailableOpportunity("alphafi", "AlphaLend USDC market"),
-        unavailableOpportunity("bluefin", "Bluefin Lend USDC market"),
-      ],
+      opportunity: unavailableOpportunity("bluefin", "Bluefin Lend USDC market"),
       status: "unavailable",
-      warnings: ["AlphaLend SDK did not return the native USDC market."],
+      warnings: ["Bluefin Lend market source did not return the native USDC market."],
     };
   }
 
-  const alphaFi = fromAlphaLendMarket(usdcMarket, "alphafi");
-  const bluefin = fromAlphaLendMarket(usdcMarket, "bluefin");
-
   return {
-    opportunities: [alphaFi, bluefin],
+    opportunity: fromBluefinLendMarket(usdcMarket),
     status: "live",
-    warnings: [
-      "Bluefin Lend has no separate lend SDK in npm; Bluefin documentation describes the lend product as an AlphaFi collaboration, so rates use the AlphaLend SDK source.",
-    ],
+    warnings: [],
   };
 }
 
@@ -340,7 +328,7 @@ async function fetchNaviUsdcOpportunity(): Promise<{
   };
 }
 
-function fromAlphaLendMarket(market: AlphaLendMarketData, protocol: "alphafi" | "bluefin"): YieldOpportunity {
+function fromBluefinLendMarket(market: BluefinLendMarketData): YieldOpportunity {
   const baseApr = decimalToNumber(market.supplyApr.interestApr);
   const stakingApr = decimalToNumber(market.supplyApr.stakingApr);
   const rewardEntries = market.supplyApr.rewards.map((reward) => ({
@@ -358,13 +346,12 @@ function fromAlphaLendMarket(market: AlphaLendMarketData, protocol: "alphafi" | 
   const borrowApr = borrowBaseApr - borrowRewardApr;
   const totalSupply = decimalToNumber(market.totalSupply);
   const price = decimalToNumber(market.price);
-  const isBluefin = protocol === "bluefin";
 
   return {
-    id: `${protocol}-alphalend-usdc`,
-    protocol,
-    protocolName: PROTOCOL_NAMES[protocol],
-    product: isBluefin ? "Bluefin Lend USDC market" : "AlphaLend USDC market",
+    id: "bluefin-lend-usdc",
+    protocol: "bluefin",
+    protocolName: PROTOCOL_NAMES.bluefin,
+    product: "Bluefin Lend USDC market",
     asset: "USDC",
     apr: totalApr,
     apy: aprToApy(totalApr),
@@ -375,13 +362,11 @@ function fromAlphaLendMarket(market: AlphaLendMarketData, protocol: "alphafi" | 
     utilization: decimalToNumber(market.utilizationRate) * 100,
     exposure: "single",
     ilRisk: "no",
-    source: isBluefin ? "AlphaLend SDK via Bluefin Lend" : "AlphaLend SDK",
+    source: "Bluefin Lend market source",
     poolId: String(market.marketId),
-    url: isBluefin ? "https://trade.bluefin.io/lend" : "https://alphafi.xyz/",
+    url: "https://trade.bluefin.io/lend",
     status: "live",
-    note: isBluefin
-      ? "Bluefin Lend is documented as an AlphaFi collaboration; this uses the AlphaLend SDK USDC market."
-      : "Pulled from AlphaLend SDK getAllMarkets, including stSUI/reward APR components.",
+    note: "Pulled from the Bluefin Lend market integration, including staking and reward APR components.",
     rateBreakdown: [
       { label: "Base supply APR", value: baseApr, kind: "base" },
       ...(stakingApr > 0 ? [{ label: "Staking APR", value: stakingApr, kind: "staking" as const }] : []),

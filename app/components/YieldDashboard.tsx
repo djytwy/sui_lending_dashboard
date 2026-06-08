@@ -34,22 +34,16 @@ const PROTOCOL_META: Record<
     glow: "shadow-[0_0_36px_rgba(159,255,191,0.16)]",
     label: "Lending",
   },
-  alphafi: {
-    accent: "#FFEA4B",
-    glow: "shadow-[0_0_36px_rgba(255,234,75,0.15)]",
-    label: "On-chain",
-  },
   bluefin: {
     accent: "#4BD8FF",
     glow: "shadow-[0_0_36px_rgba(75,216,255,0.15)]",
-    label: "AlphaFi Lend",
+    label: "Lending",
   },
 };
 
 const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   navi: "NAVI Protocol",
   scallop: "Scallop",
-  alphafi: "AlphaFi",
   bluefin: "Bluefin Lend",
 };
 
@@ -57,14 +51,12 @@ const PROTOCOL_TOTAL = Object.keys(PROTOCOL_META).length;
 
 const DEFAULT_LENDING_FORM: Omit<LendingFormInput, "address"> = {
   action: "deposit",
-  alphalendPositionCapId: "",
+  bluefinPositionCapId: "",
   amount: "",
   asset: "USDC",
-  protocol: "alphalend",
+  protocol: "scallop",
   scallopObligationId: "",
   scallopObligationKeyId: "",
-  suilendObligationId: "",
-  suilendObligationOwnerCapId: "",
 };
 
 const QUALITY_LABEL: Record<DataQuality, string> = {
@@ -272,11 +264,6 @@ export default function YieldDashboard() {
                 value="Scallop USDC market"
               />
               <SourceRow
-                label="AlphaLend SDK"
-                status={data?.sources.alphaLendSdk ?? "partial"}
-                value="AlphaFi / Bluefin Lend"
-              />
-              <SourceRow
                 label="NAVI open-api"
                 status={data?.sources.naviOpenApi ?? "partial"}
                 value="NAVI pool fields"
@@ -284,7 +271,7 @@ export default function YieldDashboard() {
               <SourceRow
                 label="Bluefin Lend"
                 status={data?.sources.bluefinLend ?? "partial"}
-                value="AlphaFi collaboration"
+                value="Bluefin USDC lend market"
               />
               <SourceRow
                 label="前端轮询"
@@ -316,7 +303,7 @@ export default function YieldDashboard() {
           }}
         />
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard key={opportunity.id} opportunity={opportunity} loading={isLoading && !data} />
           ))}
@@ -328,7 +315,7 @@ export default function YieldDashboard() {
               <p className="text-sm text-[#8585B8]">APR / APY 明细</p>
               <h2 className="text-xl font-semibold text-white">USDC 收益列表</h2>
             </div>
-            <p className="text-sm text-[#a8a8c7]">Scallop / AlphaFi / Bluefin / NAVI 使用协议 SDK 或同源 API。</p>
+            <p className="text-sm text-[#a8a8c7]">Scallop / Bluefin / NAVI 使用协议 SDK 或同源 API。</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] table-fixed text-left">
@@ -519,13 +506,13 @@ function LendingWorkbench() {
             />
           </Field>
 
-          {form.protocol === "alphalend" ? (
-            <Field label="AlphaLend Position Cap ID" wide>
+          {form.protocol === "bluefin" ? (
+            <Field label="Bluefin Position Cap ID" wide>
               <input
                 className="control"
                 placeholder="0x..."
-                value={form.alphalendPositionCapId}
-                onChange={(event) => updateForm("alphalendPositionCapId", event.target.value)}
+                value={form.bluefinPositionCapId}
+                onChange={(event) => updateForm("bluefinPositionCapId", event.target.value)}
               />
             </Field>
           ) : null}
@@ -551,26 +538,6 @@ function LendingWorkbench() {
             </>
           ) : null}
 
-          {form.protocol === "suilend" ? (
-            <>
-              <Field label="Suilend Obligation ID">
-                <input
-                  className="control"
-                  placeholder="0x..."
-                  value={form.suilendObligationId}
-                  onChange={(event) => updateForm("suilendObligationId", event.target.value)}
-                />
-              </Field>
-              <Field label="Suilend Owner Cap ID">
-                <input
-                  className="control"
-                  placeholder="0x..."
-                  value={form.suilendObligationOwnerCapId}
-                  onChange={(event) => updateForm("suilendObligationOwnerCapId", event.target.value)}
-                />
-              </Field>
-            </>
-          ) : null}
         </div>
 
         <div className="flex flex-col gap-4 rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
@@ -578,11 +545,10 @@ function LendingWorkbench() {
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-white">{selectedProtocol.name}</p>
               <span
-                className={`rounded-md border px-2 py-1 text-xs font-semibold ${
-                  selectedProtocol.state === "ready"
-                    ? "border-[#9FFFBF]/35 bg-[#9FFFBF]/10 text-[#9FFFBF]"
-                    : "border-[#FFEA4B]/35 bg-[#FFEA4B]/10 text-[#FFEA4B]"
-                }`}
+                className={`rounded-md border px-2 py-1 text-xs font-semibold ${selectedProtocol.state === "ready"
+                  ? "border-[#9FFFBF]/35 bg-[#9FFFBF]/10 text-[#9FFFBF]"
+                  : "border-[#FFEA4B]/35 bg-[#FFEA4B]/10 text-[#FFEA4B]"
+                  }`}
               >
                 {selectedProtocol.state === "ready" ? "SDK ready" : "SDK blocked"}
               </span>
@@ -680,24 +646,24 @@ function PositionsPanel({
       </div>
 
       {!address ? (
-        <div className="p-4 text-sm text-[#a8a8c7]">连接钱包后显示 Scallop、AlphaFi、Bluefin Lend 和 NAVI 的协议仓位。</div>
+        <div className="p-4 text-sm text-[#a8a8c7]">连接钱包后显示 Scallop、Bluefin Lend 和 NAVI 的 USDC 仓位。</div>
       ) : error ? (
         <div className="p-4 text-sm text-[#FF4D29]">仓位加载失败：{error}</div>
       ) : loading && !data ? (
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
           {skeletonPositions().map((position) => (
             <PositionCard key={position.id} position={position} loading />
           ))}
         </div>
       ) : positions.length ? (
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
           {positions.map((position) => (
             <PositionCard key={position.id} position={position} loading={false} />
           ))}
         </div>
       ) : (
         <div className="p-4">
-          <p className="text-sm text-[#a8a8c7]">当前钱包没有查询到可展示的 Scallop / AlphaFi / Bluefin Lend 仓位。</p>
+          <p className="text-sm text-[#a8a8c7]">当前钱包没有查询到可展示的 Scallop / Bluefin Lend / NAVI USDC 仓位。</p>
           {data?.warnings[0] ? <p className="mt-2 text-sm text-[#FFEA4B]">{data.warnings[0]}</p> : null}
         </div>
       )}

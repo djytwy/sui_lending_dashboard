@@ -1,4 +1,4 @@
-export type ProtocolId = "navi" | "scallop" | "alphafi" | "bluefin";
+export type ProtocolId = "navi" | "scallop" | "bluefin";
 
 export type DataQuality = "live" | "partial" | "unavailable";
 
@@ -39,7 +39,6 @@ export type YieldApiResponse = {
   opportunities: YieldOpportunity[];
   sources: {
     scallopSdk: DataQuality;
-    alphaLendSdk: DataQuality;
     naviOpenApi: DataQuality;
     bluefinLend: DataQuality;
   };
@@ -83,6 +82,5 @@ export type PositionsApiResponse = {
 export const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   navi: "NAVI Protocol",
   scallop: "Scallop",
-  alphafi: "AlphaFi",
   bluefin: "Bluefin Lend",
 };
