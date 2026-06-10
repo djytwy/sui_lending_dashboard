@@ -1,8 +1,8 @@
 import type { Transaction } from "@mysten/sui/transactions";
 
-export type LendingProtocolId = "navi" | "scallop" | "bluefin";
+export type LendingProtocolId = "navi" | "scallop" | "bluefin" | "suilend";
 
-export type LendingAction = "deposit" | "borrow" | "repay" | "claimRewards";
+export type LendingAction = "deposit" | "withdraw" | "borrow" | "repay" | "claimRewards";
 
 export type LendingAssetSymbol = "SUI" | "USDC";
 

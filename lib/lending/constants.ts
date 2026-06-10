@@ -21,6 +21,7 @@ export const LENDING_ASSETS: Record<LendingAssetSymbol, LendingAsset> = {
 
 export const LENDING_ACTION_LABELS: Record<LendingAction, string> = {
   deposit: "存入抵押物",
+  withdraw: "取款",
   borrow: "借款",
   repay: "还款",
   claimRewards: "领取激励",
@@ -56,13 +57,21 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
   {
     id: "navi",
     name: "NAVI Protocol",
-    sdkPackage: "@naviprotocol/lending",
-    state: "sdkBlocked",
-    actions: ["deposit", "borrow", "repay", "claimRewards"],
-    description: "SDK 已安装，但当前包导入了 @mysten/sui/client 中 v2 不再导出的 SuiClient/getFullnodeUrl。",
+    sdkPackage: "NAVI open-api + 原生 moveCall",
+    state: "ready",
+    actions: ["deposit", "withdraw"],
+    description:
+      "官方 SDK 与 @mysten/sui v2 不兼容，改为从 NAVI open-api 拉取链上配置并以原生 moveCall 构造 supply / withdraw 交易。",
     requiredFields: {},
-    warning:
-      "@naviprotocol/lending@1.4.6 的发布产物与当前 @mysten/sui@2.17.0 运行时不兼容，需要协议包升级或单独兼容层。",
+  },
+  {
+    id: "suilend",
+    name: "Suilend",
+    sdkPackage: "@suilend/sdk",
+    state: "ready",
+    actions: ["deposit"],
+    description: "通过 Suilend SDK 构造 deposit 交易；若钱包尚无 obligation，会在同笔交易中自动创建。",
+    requiredFields: {},
   },
 ];
 

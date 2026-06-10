@@ -384,6 +384,19 @@ function LendingWorkbench() {
     }));
   };
 
+  const updateProtocol = (protocolId: LendingProtocolId) => {
+    const capability = PROTOCOL_CAPABILITIES.find((item) => item.id === protocolId);
+    setForm((current) => ({
+      ...current,
+      protocol: protocolId,
+      // 各协议支持的动作不同，切换协议时把不支持的动作重置为该协议的第一个动作。
+      action:
+        capability && !capability.actions.includes(current.action)
+          ? capability.actions[0]
+          : current.action,
+    }));
+  };
+
   const execute = async () => {
     if (!account?.address) {
       setStatus("请先连接 Sui 钱包。");
@@ -456,7 +469,7 @@ function LendingWorkbench() {
             <select
               className="control"
               value={form.protocol}
-              onChange={(event) => updateForm("protocol", event.target.value as LendingProtocolId)}
+              onChange={(event) => updateProtocol(event.target.value as LendingProtocolId)}
             >
               {PROTOCOL_CAPABILITIES.map((protocol) => (
                 <option key={protocol.id} value={protocol.id}>
