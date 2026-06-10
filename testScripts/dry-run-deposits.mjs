@@ -56,8 +56,8 @@ async function prepareUsdcCoin(tx) {
 
 async function naviContext() {
   const [configRes, poolsRes] = await Promise.all([
-    fetch(`${NAVI_API}/config?env=prod&market=main`).then((r) => r.json()),
-    fetch(`${NAVI_API}/pools?env=prod&market=main`).then((r) => r.json()),
+    fetch(`${NAVI_API}/config?env=prod&market=main&sdk=1.4.6`).then((r) => r.json()),
+    fetch(`${NAVI_API}/pools?env=prod&market=main&sdk=1.4.6`).then((r) => r.json()),
   ]);
   const config = configRes.data;
   const pool = (poolsRes.data ?? []).find(

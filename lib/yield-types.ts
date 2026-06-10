@@ -53,6 +53,28 @@ export type LendingPositionReward = {
   coinType?: string;
 };
 
+/** 仓位卡片操作所需的元数据，由后端组装、前端的交易构造层直接消费。 */
+export type PositionActionMeta = {
+  withdrawable: boolean;
+  claimable: boolean;
+  decimals: number;
+  /** 原始仓位基础单位数量，用于交易计算；UI 的 amount 可以安全格式化为 2 位小数。 */
+  baseAmount?: string;
+  scallop?: {
+    kind: "lending" | "collateral" | "debt";
+    coinName: string;
+    sCoinName?: string;
+    /** market coin（sCoin）基础单位数量，取款金额按它换算。 */
+    stakedMarketAmount?: number;
+    unstakedMarketAmount?: number;
+    obligationId?: string;
+  };
+  bluefin?: {
+    marketId: string;
+    coinType: string;
+  };
+};
+
 export type UserLendingPosition = {
   id: string;
   protocol: ProtocolId;
@@ -69,6 +91,7 @@ export type UserLendingPosition = {
   source: string;
   status: DataQuality;
   note: string;
+  action?: PositionActionMeta;
 };
 
 export type PositionsApiResponse = {

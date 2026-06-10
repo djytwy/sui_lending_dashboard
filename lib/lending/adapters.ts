@@ -222,9 +222,10 @@ async function fetchNaviJson<T>(path: string, label: string): Promise<T> {
 
 async function getNaviContext(coinType: string): Promise<{ config: NaviConfig; pool: NaviPoolInfo; poolObjectId: string }> {
   const { normalizeStructTag } = await import("@mysten/sui/utils");
+  // sdk 参数必带：不带时 API 返回升级前的旧包地址，链上 version 检查会 abort(1400)。
   const [configPayload, poolsPayload] = await Promise.all([
-    fetchNaviJson<{ data?: NaviConfig }>("/config?env=prod&market=main", "config"),
-    fetchNaviJson<{ data?: NaviPoolInfo[] }>("/pools?env=prod&market=main", "pools"),
+    fetchNaviJson<{ data?: NaviConfig }>("/config?env=prod&market=main&sdk=1.4.6", "config"),
+    fetchNaviJson<{ data?: NaviPoolInfo[] }>("/pools?env=prod&market=main&sdk=1.4.6", "pools"),
   ]);
 
   const config = configPayload.data;

@@ -23,6 +23,7 @@ type BluefinLendRewardApr = {
 type BluefinLendMarketData = {
   marketId: string | number;
   coinType: string;
+  decimalDigit?: number;
   price: DecimalLike | number | string;
   supplyApr: {
     interestApr: DecimalLike | number | string;
@@ -55,6 +56,9 @@ type ScallopLending = {
   stakedValue: number;
   unstakedCoin: number;
   unstakedValue: number;
+  stakedMarketAmount: number;
+  unstakedMarketAmount: number;
+  coinDecimal: number;
   availableClaimCoin: number;
 };
 
@@ -221,6 +225,18 @@ async function fetchScallopPositions(address: string): Promise<{
           lending.stakedCoin > 0 || lending.unstakedCoin > 0
             ? `Includes ${formatAmount(lending.stakedCoin)} staked and ${formatAmount(lending.unstakedCoin)} unstaked.`
             : "Wallet sCoin lending position.",
+        action: {
+          withdrawable: true,
+          claimable: lending.availableClaimCoin > 0,
+          decimals: lending.coinDecimal ?? 6,
+          scallop: {
+            kind: "lending",
+            coinName: lending.coinName,
+            sCoinName: `s${lending.coinName}`,
+            stakedMarketAmount: lending.stakedMarketAmount ?? 0,
+            unstakedMarketAmount: lending.unstakedMarketAmount ?? 0,
+          },
+        },
       });
     }
   } else {
@@ -248,6 +264,17 @@ async function fetchScallopPositions(address: string): Promise<{
           source: "Scallop SDK",
           status: "live",
           note: "Collateral deposited in a Scallop obligation.",
+          action: {
+            withdrawable: true,
+            claimable: collectScallopRewards(account).length > 0,
+            decimals: 6,
+            baseAmount: decimalToBaseUnits(collateral.depositedCoin, 6),
+            scallop: {
+              kind: "collateral",
+              coinName: collateral.coinName,
+              obligationId: account.obligationId,
+            },
+          },
         });
       }
 
@@ -279,6 +306,16 @@ async function fetchScallopPositions(address: string): Promise<{
           source: "Scallop SDK",
           status: "live",
           note: "Borrowed asset in a Scallop obligation.",
+          action: {
+            withdrawable: false,
+            claimable: (debt.rewards ?? []).some((reward) => (reward.availableClaimCoin ?? 0) > 0),
+            decimals: 6,
+            scallop: {
+              kind: "debt",
+              coinName: debt.coinName,
+              obligationId: account.obligationId,
+            },
+          },
         });
       }
     }
@@ -300,7 +337,7 @@ function buildBluefinLendPortfolioRows(
   const rows: UserLendingPosition[] = [];
   const rewards = portfolio.rewardsToClaim.map((reward) => ({
     label: `${coinSymbolFromType(reward.coinType)} claimable`,
-    amount: decimalToNumber(reward.rewardAmount).toString(),
+    amount: formatAmount(decimalToNumber(reward.rewardAmount)),
     coinType: reward.coinType,
   }));
 
@@ -309,6 +346,7 @@ function buildBluefinLendPortfolioRows(
     const market = marketMap.get(marketId);
     if (!market || amount <= 0 || !isNativeUsdcCoinType(market.coinType)) continue;
     const price = decimalToNumber(market.price);
+    const decimals = market.decimalDigit ?? 6;
     rows.push({
       id: `bluefin-${portfolio.positionId}-supply-${marketId}`,
       protocol: "bluefin",
@@ -325,6 +363,16 @@ function buildBluefinLendPortfolioRows(
       source: "Bluefin Lend position source",
       status: "live",
       note: "Bluefin Lend supplied collateral position.",
+      action: {
+        withdrawable: true,
+        claimable: rewards.length > 0,
+        decimals,
+        baseAmount: decimalToBaseUnits(amountValue, decimals),
+        bluefin: {
+          marketId: String(marketId),
+          coinType: market.coinType,
+        },
+      },
     });
   }
 
@@ -349,6 +397,15 @@ function buildBluefinLendPortfolioRows(
       source: "Bluefin Lend position source",
       status: "live",
       note: "Bluefin Lend borrowed asset position.",
+      action: {
+        withdrawable: false,
+        claimable: rewards.length > 0,
+        decimals: 6,
+        bluefin: {
+          marketId: String(marketId),
+          coinType: market.coinType,
+        },
+      },
     });
   }
 
@@ -392,9 +449,24 @@ function numberOrNull(value: number) {
 }
 
 function formatAmount(value: number) {
-  if (!Number.isFinite(value)) return "0";
-  if (Math.abs(value) >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
-  return value.toLocaleString("en-US", { maximumFractionDigits: 9 });
+  if (!Number.isFinite(value)) return "0.00";
+  return value.toLocaleString("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+}
+
+function decimalToBaseUnits(value: DecimalLike | number | string, decimals: number) {
+  let normalized = String(typeof value === "object" ? value.toString() : value).replace(/,/g, "").trim();
+  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "0";
+    normalized = numeric.toFixed(decimals);
+  }
+
+  const [whole, fraction = ""] = normalized.split(".");
+  const padded = fraction.padEnd(decimals, "0").slice(0, decimals);
+  return (BigInt(whole || "0") * BigInt(10) ** BigInt(decimals) + BigInt(padded || "0")).toString();
 }
 
 function coinSymbolFromType(coinType: string) {

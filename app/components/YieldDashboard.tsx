@@ -67,9 +67,15 @@ const QUALITY_LABEL: Record<DataQuality, string> = {
 
 const currencyFormatter = new Intl.NumberFormat("en-US", {
   currency: "USD",
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2,
   notation: "compact",
   style: "currency",
+});
+
+const tokenAmountFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 2,
 });
 
 const percentFormatter = new Intl.NumberFormat("en-US", {
@@ -602,7 +608,7 @@ function LendingWorkbench() {
                 <div key={`${reward.protocol}-${reward.label}-${index}`} className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
                   <p className="text-sm font-semibold text-white">{reward.label}</p>
                   <p className="mt-1 break-all text-xs text-[#a8a8c7]">
-                    {reward.amount} {reward.coinType ?? ""}
+                    {formatTokenAmountText(reward.amount)} {reward.coinType ?? ""}
                   </p>
                 </div>
               ))}
@@ -671,7 +677,7 @@ function PositionsPanel({
       ) : positions.length ? (
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
           {positions.map((position) => (
-            <PositionCard key={position.id} position={position} loading={false} />
+            <PositionCard key={position.id} position={position} loading={false} onRefresh={onRefresh} />
           ))}
         </div>
       ) : (
@@ -688,8 +694,59 @@ function PositionsPanel({
   );
 }
 
-function PositionCard({ position, loading }: { position: UserLendingPosition; loading: boolean }) {
+const WITHDRAW_PERCENT_PRESETS = [25, 50, 75, 100] as const;
+
+function PositionCard({
+  position,
+  loading,
+  onRefresh,
+}: {
+  position: UserLendingPosition;
+  loading: boolean;
+  onRefresh?: () => void;
+}) {
   const meta = PROTOCOL_META[position.protocol];
+  const account = useCurrentAccount();
+  const signAndExecute = useSignAndExecuteTransaction();
+  const [showWithdrawPanel, setShowWithdrawPanel] = useState(false);
+  const [withdrawPercent, setWithdrawPercent] = useState(100);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [isBuilding, setIsBuilding] = useState(false);
+
+  const actionMeta = position.action;
+  const isBusy = isBuilding || signAndExecute.isPending;
+  const canOperate = Boolean(actionMeta) && Boolean(account?.address) && !loading && !isBusy;
+
+  const runAction = async (action: "withdraw" | "claimRewards") => {
+    if (!account?.address) {
+      setActionStatus("请先连接 Sui 钱包。");
+      return;
+    }
+
+    try {
+      setIsBuilding(true);
+      setActionStatus("正在构造交易...");
+      const { buildPositionActionTransaction } = await import("@/lib/lending/position-actions");
+      const { tx, summary } = await buildPositionActionTransaction({
+        address: account.address,
+        position,
+        action,
+        percent: action === "withdraw" ? withdrawPercent : undefined,
+      });
+
+      setActionStatus("等待钱包签名...");
+      const result = await signAndExecute.mutateAsync({ transaction: tx });
+      const digest = "digest" in result ? result.digest : undefined;
+      setActionStatus(digest ? `${summary} 已提交：${digest}` : `${summary} 已提交。`);
+      setShowWithdrawPanel(false);
+      onRefresh?.();
+    } catch (reason) {
+      setActionStatus(reason instanceof Error ? reason.message : "交易构造或执行失败");
+    } finally {
+      setIsBuilding(false);
+    }
+  };
+
   return (
     <article className="rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -733,6 +790,82 @@ function PositionCard({ position, loading }: { position: UserLendingPosition; lo
       </div>
 
       <p className="mt-4 line-clamp-2 min-h-10 text-sm text-[#a8a8c7]">{loading ? "Loading" : position.note}</p>
+
+      {!loading && actionMeta ? (
+        <div className="mt-4 border-t border-[#373A4D] pt-3">
+          <div className="flex flex-wrap gap-2">
+            {actionMeta.withdrawable ? (
+              <button
+                className="h-9 rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-3 text-sm font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!canOperate}
+                onClick={() => setShowWithdrawPanel((current) => !current)}
+                type="button"
+              >
+                取款
+              </button>
+            ) : null}
+            <button
+              className="h-9 rounded-lg border border-[#FFEA4B]/40 bg-[#FFEA4B]/10 px-3 text-sm font-semibold text-[#FFEA4B] transition hover:bg-[#FFEA4B]/15 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canOperate || !actionMeta.claimable}
+              onClick={() => runAction("claimRewards")}
+              type="button"
+            >
+              {actionMeta.claimable ? "领取激励" : "暂无激励"}
+            </button>
+          </div>
+
+          {showWithdrawPanel && actionMeta.withdrawable ? (
+            <div className="mt-3 rounded-lg border border-[#373A4D] bg-[#151722] p-3">
+              <p className="text-xs text-[#8585B8]">取款比例</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {WITHDRAW_PERCENT_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    className={`h-8 rounded-md border px-2.5 text-xs font-semibold transition ${
+                      withdrawPercent === preset
+                        ? "border-[#9FFFBF] bg-[#9FFFBF]/15 text-[#9FFFBF]"
+                        : "border-[#373A4D] bg-[#232534] text-white hover:border-[#9FFFBF]/60"
+                    }`}
+                    onClick={() => setWithdrawPercent(preset)}
+                    type="button"
+                  >
+                    {preset}%
+                  </button>
+                ))}
+                <input
+                  className="h-8 w-20 rounded-md border border-[#373A4D] bg-[#232534] px-2 text-sm text-white outline-none focus:border-[#9FFFBF]/60"
+                  inputMode="numeric"
+                  max={100}
+                  min={1}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (Number.isFinite(value)) {
+                      setWithdrawPercent(Math.min(100, Math.max(1, Math.floor(value))));
+                    }
+                  }}
+                  type="number"
+                  value={withdrawPercent}
+                />
+                <span className="text-xs text-[#8585B8]">%</span>
+              </div>
+              <button
+                className="mt-3 h-9 w-full rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-3 text-sm font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!canOperate}
+                onClick={() => runAction("withdraw")}
+                type="button"
+              >
+                {isBusy ? "执行中" : `确认取款 ${withdrawPercent}%`}
+              </button>
+            </div>
+          ) : null}
+
+          {actionStatus ? (
+            <p className="mt-3 break-all rounded-lg border border-[#373A4D] bg-[#151722] p-2.5 text-xs text-[#dfdfed]">
+              {actionStatus}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -953,7 +1086,13 @@ function sideLabel(side: UserLendingPosition["side"]) {
 
 function rewardLabel(position: UserLendingPosition) {
   if (!position.rewards.length) return "--";
-  return position.rewards.map((reward) => `${reward.amount} ${reward.label}`).join(" / ");
+  return position.rewards.map((reward) => `${formatTokenAmountText(reward.amount)} ${reward.label}`).join(" / ");
+}
+
+function formatTokenAmountText(value: string) {
+  const numeric = Number(value.replace(/,/g, "").trim());
+  if (!Number.isFinite(numeric)) return value;
+  return tokenAmountFormatter.format(numeric);
 }
 
 function breakdownLabel(item: YieldOpportunity) {
