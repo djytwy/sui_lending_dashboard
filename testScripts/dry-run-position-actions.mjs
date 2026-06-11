@@ -1,9 +1,9 @@
 /**
- * 验证脚本：直接走生产代码路径（lib/yield-positions.ts + lib/lending/position-actions.ts），
- * 自动寻找最近与 Scallop / Bluefin Lend 交互过的地址，取其真实 USDC 仓位做
- * 取款(50%/100%) 与 claim 交易的 dry-run。不需要钱包，不会发交易。
+ * Validation script: use the production code path directly (lib/yield-positions.ts + lib/lending/position-actions.ts),
+ * automatically find recent addresses that interacted with Scallop / Bluefin Lend and use their real USDC positions
+ * to dry-run withdraw (50%/100%) and claim transactions. No wallet is required and no transaction is submitted.
  *
- * 用法：node --experimental-strip-types --import ./scripts/register-loader.mjs scripts/dry-run-position-actions.mjs [address]
+ * Usage: node --experimental-strip-types --import ./scripts/register-loader.mjs scripts/dry-run-position-actions.mjs [address]
  */
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
 import { getPositionsDashboardData } from "../lib/yield-positions.ts";
@@ -55,7 +55,7 @@ async function testPositionsFor(address, protocol) {
   const positions = payload.positions.filter((p) => p.protocol === protocol && p.action);
   if (!positions.length) return false;
 
-  console.log(`\n== ${protocol} 地址 ${address.slice(0, 12)}... 共 ${positions.length} 个 USDC 仓位`);
+  console.log(`\n== ${protocol} address ${address.slice(0, 12)}... with ${positions.length} USDC positions`);
   for (const position of positions) {
     const tag = `${position.id}`;
     if (position.action.withdrawable) {
@@ -76,7 +76,7 @@ async function testPositionsFor(address, protocol) {
         console.log(`[${tag} claim] BUILD FAILED: ${error.message.slice(0, 200)}`);
       }
     } else {
-      console.log(`[${tag}] 无可领取激励，跳过 claim`);
+      console.log(`[${tag}] No claimable rewards, skipping claim`);
     }
   }
   return true;
@@ -92,16 +92,16 @@ if (manualAddress) {
     ["bluefin", ALPHALEND_PROTOCOL_OBJECT],
   ]) {
     const senders = await recentSenders(object);
-    console.log(`${protocol}: 找到 ${senders.length} 个候选地址`);
+    console.log(`${protocol}: found ${senders.length} candidate addresses`);
     let done = 0;
     for (const sender of senders) {
       if (done >= 1) break;
       try {
         if (await testPositionsFor(sender, protocol)) done++;
       } catch (error) {
-        console.log(`  ${sender.slice(0, 12)}... 查询失败: ${error.message.slice(0, 120)}`);
+        console.log(`  ${sender.slice(0, 12)}... query failed: ${error.message.slice(0, 120)}`);
       }
     }
-    if (!done) console.log(`${protocol}: 未找到带 USDC 仓位的候选地址`);
+    if (!done) console.log(`${protocol}: no candidate address with USDC positions was found`);
   }
 }

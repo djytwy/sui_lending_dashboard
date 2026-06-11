@@ -104,6 +104,7 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   let scallopSdk: DataQuality = "unavailable";
   let naviOpenApi: DataQuality = "unavailable";
   let bluefinLend: DataQuality = "unavailable";
+  const suilendSdk: DataQuality = "partial";
 
   if (scallopResult.status === "fulfilled") {
     scallopSdk = scallopResult.value.status;
@@ -152,12 +153,13 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
     generatedAt: new Date().toISOString(),
     refreshIntervalMs: REFRESH_INTERVAL_MS,
     chain: "Sui",
-    asset: "USDC",
+    asset: "Stablecoins",
     opportunities: deduped,
     sources: {
       scallopSdk,
       naviOpenApi,
       bluefinLend,
+      suilendSdk,
     },
     warnings,
   };
@@ -377,12 +379,13 @@ function fromBluefinLendMarket(market: BluefinLendMarketData): YieldOpportunity 
 }
 
 function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpportunity {
+  const isSuilend = protocol === "suilend";
   return {
     id: `${protocol}-unavailable`,
     protocol,
     protocolName: PROTOCOL_NAMES[protocol],
     product,
-    asset: "USDC",
+    asset: isSuilend ? "Stablecoins" : "USDC",
     apr: null,
     apy: null,
     tvlUsd: null,
@@ -396,7 +399,9 @@ function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpp
     poolId: null,
     url: null,
     status: "unavailable",
-    note: "No live USDC lending data was returned by the configured protocol source.",
+    note: isSuilend
+      ? "Suilend deposits are available through the SDK, but live stablecoin rate data is not configured yet."
+      : "No live USDC lending data was returned by the configured protocol source.",
     rateBreakdown: [],
   };
 }
@@ -440,7 +445,7 @@ function dedupeByProtocol(opportunities: YieldOpportunity[]) {
 
   for (const protocol of Object.keys(PROTOCOL_NAMES) as ProtocolId[]) {
     if (!byProtocol.has(protocol)) {
-      byProtocol.set(protocol, unavailableOpportunity(protocol, "USDC market"));
+      byProtocol.set(protocol, unavailableOpportunity(protocol, protocol === "suilend" ? "Suilend stablecoin deposit adapter" : "USDC market"));
     }
   }
 
@@ -488,6 +493,8 @@ function normalizeCoinType(coinType: string) {
 }
 
 function coinSymbolFromType(coinType: string) {
+  if (coinType.includes("::usdsui::USDSUI")) return "USDSUI";
+  if (coinType.includes("::usdt::USDT")) return "USDT";
   const symbol = coinType.split("::").at(-1) ?? coinType;
   return symbol.replace(/[^a-z0-9]/gi, "").toUpperCase();
 }

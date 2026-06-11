@@ -1,7 +1,7 @@
 /**
- * 验证脚本：不需要钱包，构造 NAVI 存款/取款 与 Suilend 存款交易后做 dry-run。
- * 用法：node scripts/dry-run-deposits.mjs <sender_address>
- * sender 需为一个主网上持有 USDC 的地址（仅 dry-run，不会发交易）。
+ * Validation script: build NAVI deposit/withdraw and Suilend deposit transactions and dry-run them without a wallet.
+ * Usage: node scripts/dry-run-deposits.mjs <sender_address>
+ * sender must be a mainnet address holding USDC. This only dry-runs and never submits transactions.
  */
 import { Transaction } from "@mysten/sui/transactions";
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
@@ -11,7 +11,7 @@ import { SuilendClient, LENDING_MARKET_ID, LENDING_MARKET_TYPE } from "@suilend/
 
 const SENDER = process.argv[2];
 if (!SENDER) {
-  console.error("用法: node scripts/dry-run-deposits.mjs <sender_address>");
+  console.error("Usage: node scripts/dry-run-deposits.mjs <sender_address>");
   process.exit(1);
 }
 
@@ -47,7 +47,7 @@ async function prepareUsdcCoin(tx) {
     }
     cursor = page.hasNextPage ? page.nextCursor : null;
   } while (collected < AMOUNT && cursor);
-  if (collected < AMOUNT) throw new Error(`sender USDC 余额不足 (${collected})`);
+  if (collected < AMOUNT) throw new Error(`sender USDC balance is insufficient (${collected})`);
   const primary = tx.object(coins[0].coinObjectId);
   if (coins.length > 1) tx.mergeCoins(primary, coins.slice(1).map((c) => tx.object(c.coinObjectId)));
   const [coin] = tx.splitCoins(primary, [AMOUNT]);
@@ -63,7 +63,7 @@ async function naviContext() {
   const pool = (poolsRes.data ?? []).find(
     (p) => p.suiCoinType && normalizeStructTag(p.suiCoinType) === normalizeStructTag(USDC),
   );
-  if (!config?.package || !pool?.contract?.pool) throw new Error("NAVI open-api 响应缺字段");
+  if (!config?.package || !pool?.contract?.pool) throw new Error("NAVI open-api response is missing required fields");
   console.log(`[navi-config] package=${config.package.slice(0, 12)}... version=${config.version} poolId=${pool.id}`);
   return { config, pool };
 }

@@ -1,5 +1,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import type { TransactionObjectArgument } from "@mysten/sui/transactions";
+import type { ClaimRewardsReward } from "@suilend/sdk/client";
+import type { Side as SuilendSideValue } from "@suilend/sdk/lib/types";
 import { LENDING_ACTION_LABELS, getAsset } from "./constants";
 import type {
   AdapterContext,
@@ -13,7 +15,7 @@ function parseAmountToBaseUnits(value: string, decimals: number): bigint {
   const trimmed = value.trim();
   if (!trimmed) return BigInt(0);
   if (!/^\d+(\.\d+)?$/.test(trimmed)) {
-    throw new Error("金额格式无效");
+    throw new Error("Invalid amount format");
   }
 
   const [whole, fraction = ""] = trimmed.split(".");
@@ -27,7 +29,7 @@ function requireAmount(input: LendingFormInput): bigint {
   const asset = getAsset(input.asset);
   const amount = parseAmountToBaseUnits(input.amount, asset.decimals);
   if (amount <= BigInt(0)) {
-    throw new Error("请输入大于 0 的金额");
+    throw new Error("Enter an amount greater than 0");
   }
   return amount;
 }
@@ -35,9 +37,15 @@ function requireAmount(input: LendingFormInput): bigint {
 function requireField(value: string, label: string) {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error(`缺少 ${label}`);
+    throw new Error(`Missing ${label}`);
   }
   return trimmed;
+}
+function requireScallopCoinName(asset: ReturnType<typeof getAsset>) {
+  if (!asset.scallopCoinName) {
+    throw new Error(`Scallop support for ${asset.symbol} is not configured in the installed SDK. Select USDC or use another protocol for this asset.`);
+  }
+  return asset.scallopCoinName;
 }
 
 async function buildScallopTransaction({
@@ -45,10 +53,11 @@ async function buildScallopTransaction({
 }: AdapterContext): Promise<BuildLendingTransactionResult> {
   const { ScallopClient } = await import("@scallop-io/sui-scallop-sdk");
   const asset = getAsset(input.asset);
+  const scallopCoinName = requireScallopCoinName(asset);
   const amount = Number(requireAmount(input));
 
   if (!Number.isSafeInteger(amount)) {
-    throw new Error("Scallop SDK 的快捷方法使用 number，当前金额超过安全整数范围");
+    throw new Error("The Scallop SDK shortcut method uses number, and the current amount exceeds the safe integer range");
   }
 
   const client = new ScallopClient({
@@ -59,15 +68,15 @@ async function buildScallopTransaction({
 
   let tx: Transaction;
   if (input.action === "deposit") {
-    tx = await client.supply(asset.scallopCoinName, amount, false, input.address);
+    tx = await client.supply(scallopCoinName, amount, false, input.address);
   } else if (input.action === "borrow") {
     const obligationId = requireField(input.scallopObligationId, "Scallop Obligation ID");
     const obligationKeyId = requireField(input.scallopObligationKeyId, "Scallop Obligation Key ID");
-    tx = await client.borrow(asset.scallopCoinName, amount, false, obligationId, obligationKeyId, input.address);
+    tx = await client.borrow(scallopCoinName, amount, false, obligationId, obligationKeyId, input.address);
   } else if (input.action === "repay") {
     const obligationId = requireField(input.scallopObligationId, "Scallop Obligation ID");
     const obligationKeyId = requireField(input.scallopObligationKeyId, "Scallop Obligation Key ID");
-    tx = await client.repay(asset.scallopCoinName, amount, false, obligationId, obligationKeyId, input.address);
+    tx = await client.repay(scallopCoinName, amount, false, obligationId, obligationKeyId, input.address);
   } else {
     const obligationId = requireField(input.scallopObligationId, "Scallop Obligation ID");
     const obligationKeyId = requireField(input.scallopObligationKeyId, "Scallop Obligation Key ID");
@@ -95,7 +104,7 @@ async function buildBluefinTransaction({
   const market = markets?.find((item) => item.coinType === asset.coinType);
   const marketId = market?.marketId?.toString();
   if (!marketId) {
-    throw new Error(`Bluefin Lend 未找到 ${input.asset} 市场`);
+    throw new Error(`Bluefin Lend could not find a ${input.asset} market`);
   }
 
   let tx: Transaction | undefined;
@@ -134,7 +143,7 @@ async function buildBluefinTransaction({
   }
 
   if (!tx) {
-    throw new Error("Bluefin Lend 未返回交易，可能没有可执行的仓位或奖励");
+    throw new Error("Bluefin Lend did not return a transaction. There may be no executable position or reward");
   }
 
   tx.setSenderIfNotSet(input.address);
@@ -215,14 +224,14 @@ async function fetchNaviJson<T>(path: string, label: string): Promise<T> {
     signal: AbortSignal.timeout(12_000),
   });
   if (!response.ok) {
-    throw new Error(`NAVI open-api ${label} 请求失败：${response.status}`);
+    throw new Error(`NAVI open-api ${label} request failed: ${response.status}`);
   }
   return (await response.json()) as T;
 }
 
 async function getNaviContext(coinType: string): Promise<{ config: NaviConfig; pool: NaviPoolInfo; poolObjectId: string }> {
   const { normalizeStructTag } = await import("@mysten/sui/utils");
-  // sdk 参数必带：不带时 API 返回升级前的旧包地址，链上 version 检查会 abort(1400)。
+  // The sdk parameter is required; without it, the API returns old package addresses and on-chain version checks abort(1400).
   const [configPayload, poolsPayload] = await Promise.all([
     fetchNaviJson<{ data?: NaviConfig }>("/config?env=prod&market=main&sdk=1.4.6", "config"),
     fetchNaviJson<{ data?: NaviPoolInfo[] }>("/pools?env=prod&market=main&sdk=1.4.6", "pools"),
@@ -230,7 +239,7 @@ async function getNaviContext(coinType: string): Promise<{ config: NaviConfig; p
 
   const config = configPayload.data;
   if (!config?.package || !config.storage || !config.incentiveV2 || !config.incentiveV3 || !config.priceOracle) {
-    throw new Error("NAVI open-api 配置缺少链上对象地址");
+    throw new Error("NAVI open-api config is missing on-chain object addresses");
   }
 
   const pool = (poolsPayload.data ?? []).find(
@@ -238,23 +247,19 @@ async function getNaviContext(coinType: string): Promise<{ config: NaviConfig; p
   );
   const poolObjectId = pool?.contract?.pool;
   if (!pool || !poolObjectId) {
-    throw new Error(`NAVI 未找到 ${coinType} 对应的资金池`);
+    throw new Error(`NAVI could not find the pool for ${coinType}`);
   }
 
   return { config, pool, poolObjectId };
 }
 
-/** 从用户钱包凑出指定金额的 coin（SUI 直接拆 gas，其余资产合并后再拆分）。 */
+/** Build an exact-amount stablecoin from the user wallet by merging available coins, then splitting the requested amount. */
 async function prepareExactCoin(
   tx: Transaction,
   input: LendingFormInput,
   amount: bigint,
 ): Promise<TransactionObjectArgument> {
   const asset = getAsset(input.asset);
-  if (asset.symbol === "SUI") {
-    const [coin] = tx.splitCoins(tx.gas, [amount]);
-    return coin;
-  }
 
   const { SuiJsonRpcClient, getJsonRpcFullnodeUrl } = await import("@mysten/sui/jsonRpc");
   const client = new SuiJsonRpcClient({ network: "mainnet", url: getJsonRpcFullnodeUrl("mainnet") });
@@ -273,7 +278,7 @@ async function prepareExactCoin(
   } while (collected < amount && cursor);
 
   if (collected < amount) {
-    throw new Error(`${asset.symbol} 余额不足：需要 ${input.amount}，钱包仅有 ${collected} 基础单位`);
+    throw new Error(`${asset.symbol} balance is insufficient: need ${input.amount}, wallet only has ${collected} base units`);
   }
 
   const primary = tx.object(coins[0].coinObjectId);
@@ -291,7 +296,7 @@ async function buildNaviTransaction({
   input,
 }: AdapterContext): Promise<BuildLendingTransactionResult> {
   if (input.action !== "deposit" && input.action !== "withdraw") {
-    throw new Error("NAVI 适配器当前仅支持存款与取款");
+    throw new Error("The NAVI adapter currently only supports deposit and withdraw");
   }
 
   const asset = getAsset(input.asset);
@@ -302,7 +307,7 @@ async function buildNaviTransaction({
 
   if (input.action === "deposit") {
     const coin = await prepareExactCoin(tx, input, amount);
-    // 等价于 @naviprotocol/lending 的 depositCoinPTB（incentive_v3::entry_deposit）。
+    // Equivalent to @naviprotocol/lending depositCoinPTB (incentive_v3::entry_deposit).
     tx.moveCall({
       target: `${config.package}::incentive_v3::entry_deposit`,
       arguments: [
@@ -317,14 +322,8 @@ async function buildNaviTransaction({
       ],
       typeArguments: [pool.suiCoinType],
     });
-    if (config.version === 2 && asset.symbol === "SUI") {
-      tx.moveCall({
-        target: `${config.package}::pool::refresh_stake`,
-        arguments: [tx.object(poolObjectId), tx.object(SUI_SYSTEM_STATE_OBJECT)],
-      });
-    }
   } else {
-    // 等价于 withdrawCoinPTB：取出 Balance 后转换为 Coin 并转给用户。
+    // Equivalent to withdrawCoinPTB: withdraw a Balance, convert it to a Coin, then transfer it to the user.
     const isV2 = config.version === 2;
     const [balance] = tx.moveCall({
       target: `${config.package}::incentive_v3::${isV2 ? "withdraw_v2" : "withdraw"}`,
@@ -358,16 +357,69 @@ async function buildNaviTransaction({
   };
 }
 
+type SuilendSideModule = { Side: { DEPOSIT: SuilendSideValue; BORROW: SuilendSideValue } };
+
+function collectSuilendClaimRewards(client: unknown, obligation: unknown, sideModule: SuilendSideModule): ClaimRewardsReward[] {
+  const typedClient = client as {
+    lendingMarket: {
+      reserves: {
+        depositsPoolRewardManager?: { poolRewards?: ({ coinType?: { name?: string } } | null)[] };
+        borrowsPoolRewardManager?: { poolRewards?: ({ coinType?: { name?: string } } | null)[] };
+      }[];
+    };
+  };
+  const typedObligation = obligation as {
+    deposits?: { reserveArrayIndex: string | bigint; userRewardManagerIndex: string | number | bigint }[];
+    borrows?: { reserveArrayIndex: string | bigint; userRewardManagerIndex: string | number | bigint }[];
+    userRewardManagers?: { rewards?: ({ earnedRewards?: { value?: string | number | bigint } } | null)[] }[];
+  };
+
+  const rewards: ClaimRewardsReward[] = [];
+
+  const collectForSide = (
+    records: { reserveArrayIndex: string | bigint; userRewardManagerIndex: string | number | bigint }[] | undefined,
+    side: SuilendSideValue,
+    rewardManagerKey: "depositsPoolRewardManager" | "borrowsPoolRewardManager",
+  ) => {
+    for (const record of records ?? []) {
+      const reserveArrayIndex = BigInt(record.reserveArrayIndex);
+      const userRewardManagerIndex = Number(record.userRewardManagerIndex);
+      const userRewardManager = typedObligation.userRewardManagers?.[userRewardManagerIndex];
+      const reserve = typedClient.lendingMarket.reserves[Number(reserveArrayIndex)];
+      const poolRewards = reserve?.[rewardManagerKey]?.poolRewards ?? [];
+
+      for (const [rewardIndex, userReward] of (userRewardManager?.rewards ?? []).entries()) {
+        const earnedRewards = BigInt(userReward?.earnedRewards?.value ?? 0);
+        if (earnedRewards <= BigInt(0)) continue;
+        const rewardCoinType = poolRewards[rewardIndex]?.coinType?.name;
+        if (!rewardCoinType) continue;
+        rewards.push({
+          reserveArrayIndex,
+          rewardIndex: BigInt(rewardIndex),
+          rewardCoinType,
+          side,
+        });
+      }
+    }
+  };
+
+  collectForSide(typedObligation.deposits, sideModule.Side.DEPOSIT, "depositsPoolRewardManager");
+  collectForSide(typedObligation.borrows, sideModule.Side.BORROW, "borrowsPoolRewardManager");
+
+  return rewards;
+}
+
 async function buildSuilendTransaction({
   input,
 }: AdapterContext): Promise<BuildLendingTransactionResult> {
-  if (input.action !== "deposit") {
-    throw new Error("Suilend 适配器当前仅支持存款");
+  if (input.action !== "deposit" && input.action !== "withdraw" && input.action !== "claimRewards") {
+    throw new Error("The Suilend adapter currently only supports deposit, withdraw, and claimRewards");
   }
 
-  const [{ SuilendClient, LENDING_MARKET_ID, LENDING_MARKET_TYPE }, { SuiGrpcClient }] = await Promise.all([
+  const [{ SuilendClient, LENDING_MARKET_ID, LENDING_MARKET_TYPE }, { SuiGrpcClient }, sideModule] = await Promise.all([
     import("@suilend/sdk/client"),
     import("@mysten/sui/grpc"),
+    import("@suilend/sdk/lib/types"),
   ]);
 
   const asset = getAsset(input.asset);
@@ -384,14 +436,46 @@ async function buildSuilendTransaction({
     grpcClient,
   );
 
+  if (input.action !== "claimRewards") {
+    const reserveIndex = client.findReserveArrayIndex(asset.coinType);
+    if (reserveIndex < BigInt(0)) {
+      throw new Error("Suilend could not find a " + input.asset + " reserve");
+    }
+  }
+
   const tx = new Transaction();
-  if (obligationOwnerCaps.length > 0) {
-    await client.depositIntoObligation(input.address, asset.coinType, amount.toString(), tx, obligationOwnerCaps[0].id);
+  if (input.action === "deposit") {
+    if (obligationOwnerCaps.length > 0) {
+      await client.depositIntoObligation(input.address, asset.coinType, amount.toString(), tx, obligationOwnerCaps[0].id);
+    } else {
+      // First deposit: create an obligation and transfer the owner cap to the user in the same transaction.
+      const obligationOwnerCap = client.createObligation(tx);
+      await client.depositIntoObligation(input.address, asset.coinType, amount.toString(), tx, obligationOwnerCap);
+      tx.transferObjects([obligationOwnerCap], tx.pure.address(input.address));
+    }
   } else {
-    // 首次存款：同一笔交易里创建 obligation 并把凭证转给用户。
-    const obligationOwnerCap = client.createObligation(tx);
-    await client.depositIntoObligation(input.address, asset.coinType, amount.toString(), tx, obligationOwnerCap);
-    tx.transferObjects([obligationOwnerCap], tx.pure.address(input.address));
+    const obligationOwnerCap = obligationOwnerCaps[0];
+    if (!obligationOwnerCap) {
+      throw new Error("No Suilend obligation owner cap was found in this wallet");
+    }
+
+    if (input.action === "withdraw") {
+      await client.withdrawAndSendToUser(
+        input.address,
+        obligationOwnerCap.id,
+        obligationOwnerCap.obligationId,
+        asset.coinType,
+        amount.toString(),
+        tx,
+      );
+    } else {
+      const obligation = await client.getObligation(obligationOwnerCap.obligationId);
+      const rewards = collectSuilendClaimRewards(client, obligation, sideModule as SuilendSideModule);
+      if (!rewards.length) {
+        throw new Error("No Suilend rewards are currently claimable for this wallet");
+      }
+      client.claimRewardsAndSendToUser(input.address, obligationOwnerCap.id, rewards, tx);
+    }
   }
 
   tx.setSenderIfNotSet(input.address);
@@ -399,7 +483,7 @@ async function buildSuilendTransaction({
 
   return {
     tx,
-    summary: `Suilend ${LENDING_ACTION_LABELS[input.action]} ${input.amount} ${input.asset}`,
+    summary: `Suilend ${LENDING_ACTION_LABELS[input.action]} ${input.action === "claimRewards" ? "" : `${input.amount} ${input.asset}`}`,
   };
 }
 

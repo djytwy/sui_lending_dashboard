@@ -4,13 +4,13 @@ export type LendingProtocolId = "navi" | "scallop" | "bluefin" | "suilend";
 
 export type LendingAction = "deposit" | "withdraw" | "borrow" | "repay" | "claimRewards";
 
-export type LendingAssetSymbol = "SUI" | "USDC";
+export type LendingAssetSymbol = "USDC" | "USDSUI" | "USDT";
 
 export type LendingAsset = {
   symbol: LendingAssetSymbol;
   coinType: string;
   decimals: number;
-  scallopCoinName: string;
+  scallopCoinName?: string;
 };
 
 export type ProtocolRuntimeState = "ready" | "needsConfig" | "sdkBlocked";

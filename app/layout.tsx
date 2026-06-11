@@ -4,8 +4,8 @@ import "./globals.css";
 import Providers from "./components/Providers";
 
 export const metadata: Metadata = {
-  title: "Sui USDC Yield Dashboard",
-  description: "Live APR and APY dashboard for USDC yield opportunities on Sui.",
+  title: "Sui Stablecoin Yield Dashboard",
+  description: "Live APR, APY, deposits, withdrawals, and rewards for stablecoin yield opportunities on Sui.",
 };
 
 export default function RootLayout({
@@ -15,7 +15,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="zh-CN"
+      lang="en"
       className="h-full antialiased"
     >
       <body className="min-h-full flex flex-col">

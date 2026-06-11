@@ -11,15 +11,15 @@ export type PositionActionRequest = {
   address: string;
   position: UserLendingPosition;
   action: PositionAction;
-  /** 取款百分比（1-100），action 为 withdraw 时必填。 */
+  /** Withdrawal percentage (1-100), required when action is withdraw. */
   percent?: number;
 };
 
-/** 把仓位卡片上格式化过的数量（可能带千分位逗号）换算成基础单位。 */
+/** Convert the formatted position-card amount, possibly with thousands separators, into base units. */
 function parsePositionAmountToBaseUnits(formatted: string, decimals: number): bigint {
   const cleaned = formatted.replace(/,/g, "").trim();
   if (!/^\d+(\.\d+)?$/.test(cleaned)) {
-    throw new Error(`无法解析仓位数量：${formatted}`);
+    throw new Error(`Unable to parse position amount: ${formatted}`);
   }
   const [whole, fraction = ""] = cleaned.split(".");
   const padded = fraction.padEnd(decimals, "0").slice(0, decimals);
@@ -30,7 +30,7 @@ function getPositionAmountBaseUnits(position: UserLendingPosition, decimals: num
   const baseAmount = position.action?.baseAmount;
   if (baseAmount !== undefined) {
     if (!/^\d+$/.test(baseAmount)) {
-      throw new Error("仓位原始数量格式无效");
+      throw new Error("Invalid raw position amount format");
     }
     return BigInt(baseAmount);
   }
@@ -40,7 +40,7 @@ function getPositionAmountBaseUnits(position: UserLendingPosition, decimals: num
 function requirePercent(request: PositionActionRequest): number {
   const percent = request.percent ?? 0;
   if (!Number.isFinite(percent) || percent < 1 || percent > 100) {
-    throw new Error("取款百分比需在 1-100 之间");
+    throw new Error("Withdrawal percentage must be between 1 and 100");
   }
   return Math.floor(percent);
 }
@@ -63,10 +63,10 @@ async function resolveScallopObligationKeyId(
   const obligations = await client.getObligations(address);
   const obligation = obligations.find((item) => item.id === obligationId);
   if (!obligation) {
-    throw new Error("未找到该 Scallop obligation，无法验证所有权");
+    throw new Error("Scallop obligation was not found, so ownership could not be verified");
   }
   if (obligation.locked) {
-    throw new Error("该 Scallop obligation 处于质押锁定状态，请先在 Scallop 官网解除质押后再操作");
+    throw new Error("This Scallop obligation is staked and locked. Unstake it on the Scallop app before continuing");
   }
   return obligation.keyId;
 }
@@ -77,7 +77,7 @@ async function buildScallopPositionTransaction(
   const { address, position, action } = request;
   const meta = position.action?.scallop;
   if (!meta) {
-    throw new Error("缺少 Scallop 仓位元数据");
+    throw new Error("Missing Scallop position metadata");
   }
   const client = await createScallopClient();
 
@@ -86,17 +86,17 @@ async function buildScallopPositionTransaction(
       return (await client.claim(meta.sCoinName ?? `s${meta.coinName}`, false, undefined, address)) as Transaction;
     }
 
-    // 取款：金额以 market coin（sCoin）基础单位计，按百分比对持有总量取整。
+    // Withdrawals are calculated in market coin (sCoin) base units and rounded down by percentage.
     const percent = requirePercent(request);
     const staked = Math.max(0, Math.floor(meta.stakedMarketAmount ?? 0));
     const unstaked = Math.max(0, Math.floor(meta.unstakedMarketAmount ?? 0));
     const total = staked + unstaked;
     if (total <= 0) {
-      throw new Error("当前仓位没有可取款的份额");
+      throw new Error("This position has no withdrawable shares");
     }
     const need = percent === 100 ? total : Math.floor((total * percent) / 100);
     if (need <= 0) {
-      throw new Error("取款比例换算后的金额为 0，请提高比例");
+      throw new Error("The withdrawal percentage converts to 0 amount. Increase the percentage");
     }
     const unstakedUse = Math.min(need, unstaked);
     const stakedUse = need - unstakedUse;
@@ -106,7 +106,7 @@ async function buildScallopPositionTransaction(
     if (stakedUse > 0) {
       const marketCoin = await txBlock.unstakeQuick(stakedUse, meta.sCoinName ?? `s${meta.coinName}`, undefined, false);
       if (!marketCoin) {
-        throw new Error("Scallop spool 中没有足够的质押份额可解押");
+        throw new Error("The Scallop spool does not have enough staked shares to unstake");
       }
       const coin = txBlock.withdraw(marketCoin, meta.coinName);
       txBlock.transferObjects([coin], address);
@@ -118,10 +118,10 @@ async function buildScallopPositionTransaction(
     return txBlock.txBlock;
   }
 
-  // collateral / debt：都挂在 obligation 上，keyId 自动解析。
+  // Collateral and debt positions are attached to an obligation; resolve keyId automatically.
   const obligationId = meta.obligationId;
   if (!obligationId) {
-    throw new Error("缺少 Scallop obligation ID");
+    throw new Error("Missing Scallop obligation ID");
   }
   const obligationKeyId = await resolveScallopObligationKeyId(client, address, obligationId);
 
@@ -130,7 +130,7 @@ async function buildScallopPositionTransaction(
   }
 
   if (meta.kind === "debt") {
-    throw new Error("借款仓位不支持取款，请使用还款");
+    throw new Error("Borrow positions cannot be withdrawn. Use repay instead");
   }
 
   const percent = requirePercent(request);
@@ -140,7 +140,7 @@ async function buildScallopPositionTransaction(
     percent === 100 ? totalBase : (totalBase * BigInt(percent)) / BigInt(100);
   const amountNumber = Number(amountBase);
   if (!Number.isSafeInteger(amountNumber) || amountNumber <= 0) {
-    throw new Error("取款金额无效或超过安全整数范围");
+    throw new Error("Withdrawal amount is invalid or exceeds the safe integer range");
   }
   return (await client.withdrawCollateral(
     meta.coinName,
@@ -158,26 +158,26 @@ async function buildBluefinPositionTransaction(
   const { address, position, action } = request;
   const meta = position.action?.bluefin;
   if (!meta) {
-    throw new Error("缺少 Bluefin 仓位元数据");
+    throw new Error("Missing Bluefin position metadata");
   }
 
   const { AlphalendClient: BluefinLendClient, getUserPositionCapId } = await import("@alphafi/alphalend-sdk");
   const client = new BluefinLendClient("mainnet");
   const positionCapId = await getUserPositionCapId(client.blockchain, address);
   if (!positionCapId) {
-    throw new Error("未找到钱包中的 Bluefin Position Cap，无法操作该仓位");
+    throw new Error("No Bluefin Position Cap was found in this wallet, so the position cannot be operated");
   }
 
   if (action === "claimRewards") {
     const tx = await client.claimRewards({
       address,
       positionCapId,
-      // 领到钱包（不复投）。
+      // Claim to the wallet without redepositing.
       claimAndDepositAll: false,
       claimAndDepositAlpha: false,
     });
     if (!tx) {
-      throw new Error("Bluefin Lend 未返回交易，可能没有可领取的激励");
+      throw new Error("Bluefin Lend did not return a transaction. There may be no claimable rewards");
     }
     return tx;
   }
@@ -185,13 +185,13 @@ async function buildBluefinPositionTransaction(
   const percent = requirePercent(request);
   const decimals = position.action?.decimals ?? 6;
   const totalBase = getPositionAmountBaseUnits(position, decimals);
-  // 100% 时使用 SDK 约定的 MAX_U64 哨兵值取出全部，避免利息累计造成的尾差。
+  // For 100%, use the SDK MAX_U64 sentinel to withdraw all and avoid dust from accrued interest.
   const amount = percent === 100 ? MAX_U64 : (totalBase * BigInt(percent)) / BigInt(100);
   if (amount <= BigInt(0)) {
-    throw new Error("取款比例换算后的金额为 0，请提高比例");
+    throw new Error("The withdrawal percentage converts to 0 amount. Increase the percentage");
   }
 
-  // 取款的风控检查需要该仓位涉及的所有资产价格都是新鲜的，否则 oracle 检查会 abort。
+  // Risk checks require fresh oracle prices for every asset involved in the position.
   const priceUpdateCoinTypes = new Set<string>([meta.coinType]);
   try {
     const [markets, portfolios] = await Promise.all([
@@ -209,7 +209,7 @@ async function buildBluefinPositionTransaction(
       }
     }
   } catch {
-    // 拿不到完整仓位时退回只更新本资产价格
+    // If the full position cannot be loaded, fall back to updating only this asset price.
   }
 
   const tx = await client.withdraw({
@@ -221,7 +221,7 @@ async function buildBluefinPositionTransaction(
     priceUpdateCoinTypes: [...priceUpdateCoinTypes],
   });
   if (!tx) {
-    throw new Error("Bluefin Lend 未返回取款交易");
+    throw new Error("Bluefin Lend did not return a withdrawal transaction");
   }
   return tx;
 }
@@ -232,13 +232,13 @@ export async function buildPositionActionTransaction(
   const { position, action } = request;
   const actionMeta = position.action;
   if (!actionMeta) {
-    throw new Error("该仓位暂不支持卡片操作");
+    throw new Error("This position does not support card actions yet");
   }
   if (action === "withdraw" && !actionMeta.withdrawable) {
-    throw new Error("该仓位不支持取款");
+    throw new Error("This position does not support withdrawals");
   }
   if (action === "claimRewards" && !actionMeta.claimable) {
-    throw new Error("该仓位当前没有可领取的激励");
+    throw new Error("This position currently has no claimable rewards");
   }
 
   let tx: Transaction;
@@ -247,7 +247,7 @@ export async function buildPositionActionTransaction(
   } else if (position.protocol === "bluefin") {
     tx = await buildBluefinPositionTransaction(request);
   } else {
-    throw new Error(`${position.protocolName} 仓位暂不支持卡片操作`);
+    throw new Error(`${position.protocolName} position does not support card actions yet`);
   }
 
   tx.setSenderIfNotSet(request.address);
@@ -255,8 +255,8 @@ export async function buildPositionActionTransaction(
 
   const summary =
     action === "withdraw"
-      ? `${position.protocolName} 取款 ${request.percent}% ${position.asset}`
-      : `${position.protocolName} 领取激励`;
+      ? `${position.protocolName} withdraw ${request.percent}% ${position.asset}`
+      : `${position.protocolName} claim rewards`;
 
   return { tx, summary };
 }

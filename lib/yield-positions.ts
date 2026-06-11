@@ -5,11 +5,16 @@ import {
   type ProtocolId,
   type UserLendingPosition,
 } from "./yield-types";
+import { STABLECOIN_ASSETS } from "./lending/constants";
+import type { LendingAssetSymbol } from "./lending/types";
 
 const BLUEFIN_LEND_CACHE_TTL_MS = 60_000;
 const POSITION_SOURCE_TIMEOUT_MS = 20_000;
-const NATIVE_USDC_COIN_TYPE =
-  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
+const STABLECOIN_SYMBOLS = new Set<LendingAssetSymbol>(STABLECOIN_ASSETS.map((asset) => asset.symbol));
+const STABLECOIN_COIN_TYPES = new Map(STABLECOIN_ASSETS.map((asset) => [normalizeCoinType(asset.coinType), asset.symbol]));
+const SCALLOP_STABLECOIN_NAMES = new Map(
+  STABLECOIN_ASSETS.flatMap((asset) => (asset.scallopCoinName ? [[asset.scallopCoinName, asset.symbol] as const] : [])),
+);
 
 type DecimalLike = {
   toString: () => string;
@@ -104,6 +109,7 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
     navi: "unavailable",
     scallop: "unavailable",
     bluefin: "unavailable",
+    suilend: "unavailable",
   };
 
   if (!/^0x[a-fA-F0-9]{64}$/.test(normalizedAddress)) {
@@ -142,11 +148,12 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
   warnings.push(
     "NAVI positions are not queried yet because @naviprotocol/lending@1.4.6 is incompatible with the installed @mysten/sui v2 client; NAVI rates use open-api instead.",
   );
+  warnings.push("Suilend positions are not queried yet; deposits are available through the Suilend SDK adapter.");
 
   return {
     generatedAt: new Date().toISOString(),
     address: normalizedAddress,
-    positions: positions.filter(isUsdcPosition).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)),
+    positions: positions.filter(isStablecoinPosition).sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0)),
     sources,
     warnings,
   };
@@ -202,13 +209,16 @@ async function fetchScallopPositions(address: string): Promise<{
 
   if (lendingsResult.status === "fulfilled") {
     for (const lending of Object.values(lendingsResult.value)) {
-      if (!lending || lending.suppliedCoin <= 0 || !isScallopUsdcAsset(lending.symbol, lending.coinName)) continue;
+      if (!lending || lending.suppliedCoin <= 0) continue;
+      const assetSymbol = stablecoinSymbolFromScallop(lending.symbol, lending.coinName);
+      if (!assetSymbol) continue;
+      const decimals = lending.coinDecimal ?? stablecoinDecimals(assetSymbol);
       positions.push({
         id: `scallop-lending-${lending.coinName}`,
         protocol: "scallop",
         protocolName: PROTOCOL_NAMES.scallop,
-        product: `${lending.symbol} lending`,
-        asset: lending.symbol,
+        product: `${assetSymbol} lending`,
+        asset: assetSymbol,
         side: "supply",
         amount: formatAmount(lending.suppliedCoin),
         valueUsd: numberOrNull(lending.suppliedValue),
@@ -228,7 +238,7 @@ async function fetchScallopPositions(address: string): Promise<{
         action: {
           withdrawable: true,
           claimable: lending.availableClaimCoin > 0,
-          decimals: lending.coinDecimal ?? 6,
+          decimals,
           scallop: {
             kind: "lending",
             coinName: lending.coinName,
@@ -247,13 +257,16 @@ async function fetchScallopPositions(address: string): Promise<{
     for (const account of Object.values(obligationAccountsResult.value)) {
       if (!account) continue;
       for (const collateral of Object.values(account.collaterals ?? {})) {
-        if (!collateral || collateral.depositedCoin <= 0 || !isScallopUsdcAsset(collateral.symbol, collateral.coinName)) continue;
+        if (!collateral || collateral.depositedCoin <= 0) continue;
+        const assetSymbol = stablecoinSymbolFromScallop(collateral.symbol, collateral.coinName);
+        if (!assetSymbol) continue;
+        const decimals = stablecoinDecimals(assetSymbol);
         positions.push({
           id: `scallop-collateral-${account.obligationId}-${collateral.coinName}`,
           protocol: "scallop",
           protocolName: PROTOCOL_NAMES.scallop,
-          product: `${collateral.symbol} collateral`,
-          asset: collateral.symbol,
+          product: `${assetSymbol} collateral`,
+          asset: assetSymbol,
           side: "supply",
           amount: formatAmount(collateral.depositedCoin),
           valueUsd: numberOrNull(collateral.depositedValue),
@@ -267,8 +280,8 @@ async function fetchScallopPositions(address: string): Promise<{
           action: {
             withdrawable: true,
             claimable: collectScallopRewards(account).length > 0,
-            decimals: 6,
-            baseAmount: decimalToBaseUnits(collateral.depositedCoin, 6),
+            decimals,
+            baseAmount: decimalToBaseUnits(collateral.depositedCoin, decimals),
             scallop: {
               kind: "collateral",
               coinName: collateral.coinName,
@@ -279,7 +292,10 @@ async function fetchScallopPositions(address: string): Promise<{
       }
 
       for (const debt of Object.values(account.debts ?? {})) {
-        if (!debt || debt.borrowedCoin <= 0 || !isScallopUsdcAsset(debt.symbol, debt.coinName)) continue;
+        if (!debt || debt.borrowedCoin <= 0) continue;
+        const assetSymbol = stablecoinSymbolFromScallop(debt.symbol, debt.coinName);
+        if (!assetSymbol) continue;
+        const decimals = stablecoinDecimals(assetSymbol);
         const rewardApr = (debt.rewards ?? []).reduce(
           (sum, reward) => sum + (reward.boostedRewardApr ?? reward.baseRewardApr ?? 0),
           0,
@@ -288,8 +304,8 @@ async function fetchScallopPositions(address: string): Promise<{
           id: `scallop-debt-${account.obligationId}-${debt.coinName}`,
           protocol: "scallop",
           protocolName: PROTOCOL_NAMES.scallop,
-          product: `${debt.symbol} debt`,
-          asset: debt.symbol,
+          product: `${assetSymbol} debt`,
+          asset: assetSymbol,
           side: "borrow",
           amount: formatAmount(debt.borrowedCoin),
           valueUsd: numberOrNull(debt.borrowedValue),
@@ -309,7 +325,7 @@ async function fetchScallopPositions(address: string): Promise<{
           action: {
             withdrawable: false,
             claimable: (debt.rewards ?? []).some((reward) => (reward.availableClaimCoin ?? 0) > 0),
-            decimals: 6,
+            decimals,
             scallop: {
               kind: "debt",
               coinName: debt.coinName,
@@ -344,15 +360,17 @@ function buildBluefinLendPortfolioRows(
   for (const [marketId, amountValue] of portfolio.suppliedAmounts.entries()) {
     const amount = decimalToNumber(amountValue);
     const market = marketMap.get(marketId);
-    if (!market || amount <= 0 || !isNativeUsdcCoinType(market.coinType)) continue;
+    if (!market || amount <= 0) continue;
+    const assetSymbol = stablecoinSymbolFromCoinType(market.coinType);
+    if (!assetSymbol) continue;
     const price = decimalToNumber(market.price);
-    const decimals = market.decimalDigit ?? 6;
+    const decimals = market.decimalDigit ?? stablecoinDecimals(assetSymbol);
     rows.push({
       id: `bluefin-${portfolio.positionId}-supply-${marketId}`,
       protocol: "bluefin",
       protocolName: PROTOCOL_NAMES.bluefin,
-      product: `${coinSymbolFromType(market.coinType)} supply`,
-      asset: coinSymbolFromType(market.coinType),
+      product: `${assetSymbol} supply`,
+      asset: assetSymbol,
       side: "supply",
       amount: formatAmount(amount),
       valueUsd: numberOrNull(amount * price),
@@ -379,14 +397,17 @@ function buildBluefinLendPortfolioRows(
   for (const [marketId, amountValue] of portfolio.borrowedAmounts.entries()) {
     const amount = decimalToNumber(amountValue);
     const market = marketMap.get(marketId);
-    if (!market || amount <= 0 || !isNativeUsdcCoinType(market.coinType)) continue;
+    if (!market || amount <= 0) continue;
+    const assetSymbol = stablecoinSymbolFromCoinType(market.coinType);
+    if (!assetSymbol) continue;
     const price = decimalToNumber(market.price);
+    const decimals = market.decimalDigit ?? stablecoinDecimals(assetSymbol);
     rows.push({
       id: `bluefin-${portfolio.positionId}-borrow-${marketId}`,
       protocol: "bluefin",
       protocolName: PROTOCOL_NAMES.bluefin,
-      product: `${coinSymbolFromType(market.coinType)} borrow`,
-      asset: coinSymbolFromType(market.coinType),
+      product: `${assetSymbol} borrow`,
+      asset: assetSymbol,
       side: "borrow",
       amount: formatAmount(amount),
       valueUsd: numberOrNull(amount * price),
@@ -400,7 +421,7 @@ function buildBluefinLendPortfolioRows(
       action: {
         withdrawable: false,
         claimable: rewards.length > 0,
-        decimals: 6,
+        decimals,
         bluefin: {
           marketId: String(marketId),
           coinType: market.coinType,
@@ -470,26 +491,34 @@ function decimalToBaseUnits(value: DecimalLike | number | string, decimals: numb
 }
 
 function coinSymbolFromType(coinType: string) {
-  if (coinType.includes("::usdc::USDC")) return "USDC";
+  const stablecoinSymbol = stablecoinSymbolFromCoinType(coinType);
+  if (stablecoinSymbol) return stablecoinSymbol;
   if (coinType.includes("DEEPBOOK_STAKED")) return "DB-USDC";
   const symbol = coinType.split("::").at(-1) ?? coinType;
   return symbol.replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
-function isUsdcPosition(position: UserLendingPosition) {
-  return isUsdcSymbol(position.asset);
+function isStablecoinPosition(position: UserLendingPosition) {
+  return isStablecoinSymbol(position.asset);
 }
 
-function isScallopUsdcAsset(symbol: string | undefined, coinName: string | undefined) {
-  return isUsdcSymbol(symbol) || coinName?.trim().toLowerCase() === "usdc";
+function stablecoinSymbolFromScallop(symbol: string | undefined, coinName: string | undefined) {
+  const mapped = coinName ? SCALLOP_STABLECOIN_NAMES.get(coinName.trim().toLowerCase()) : undefined;
+  if (mapped) return mapped;
+  const normalizedSymbol = symbol?.trim().toUpperCase();
+  return isStablecoinSymbol(normalizedSymbol) ? normalizedSymbol : null;
 }
 
-function isNativeUsdcCoinType(coinType: string) {
-  return normalizeCoinType(coinType) === NATIVE_USDC_COIN_TYPE;
+function stablecoinSymbolFromCoinType(coinType: string) {
+  return STABLECOIN_COIN_TYPES.get(normalizeCoinType(coinType)) ?? null;
 }
 
-function isUsdcSymbol(symbol: string | undefined) {
-  return symbol?.trim().toUpperCase() === "USDC";
+function isStablecoinSymbol(symbol: string | undefined): symbol is LendingAssetSymbol {
+  return STABLECOIN_SYMBOLS.has((symbol ?? "").trim().toUpperCase() as LendingAssetSymbol);
+}
+
+function stablecoinDecimals(symbol: LendingAssetSymbol) {
+  return STABLECOIN_ASSETS.find((asset) => asset.symbol === symbol)?.decimals ?? 6;
 }
 
 function normalizeCoinType(coinType: string) {

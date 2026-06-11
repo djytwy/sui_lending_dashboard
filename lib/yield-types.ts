@@ -1,4 +1,4 @@
-export type ProtocolId = "navi" | "scallop" | "bluefin";
+export type ProtocolId = "navi" | "scallop" | "bluefin" | "suilend";
 
 export type DataQuality = "live" | "partial" | "unavailable";
 
@@ -35,12 +35,13 @@ export type YieldApiResponse = {
   generatedAt: string;
   refreshIntervalMs: number;
   chain: "Sui";
-  asset: "USDC";
+  asset: "USDC" | "USDSUI" | "USDT" | "Stablecoins";
   opportunities: YieldOpportunity[];
   sources: {
     scallopSdk: DataQuality;
     naviOpenApi: DataQuality;
     bluefinLend: DataQuality;
+    suilendSdk: DataQuality;
   };
   warnings: string[];
 };
@@ -53,18 +54,18 @@ export type LendingPositionReward = {
   coinType?: string;
 };
 
-/** 仓位卡片操作所需的元数据，由后端组装、前端的交易构造层直接消费。 */
+/** Metadata required by position-card actions, assembled server-side and consumed by the client transaction builder. */
 export type PositionActionMeta = {
   withdrawable: boolean;
   claimable: boolean;
   decimals: number;
-  /** 原始仓位基础单位数量，用于交易计算；UI 的 amount 可以安全格式化为 2 位小数。 */
+  /** Raw position amount in base units for transaction math; UI amount can safely be formatted to 2 decimals. */
   baseAmount?: string;
   scallop?: {
     kind: "lending" | "collateral" | "debt";
     coinName: string;
     sCoinName?: string;
-    /** market coin（sCoin）基础单位数量，取款金额按它换算。 */
+    /** Market coin (sCoin) amount in base units, used to calculate withdrawals. */
     stakedMarketAmount?: number;
     unstakedMarketAmount?: number;
     obligationId?: string;
@@ -106,4 +107,5 @@ export const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   navi: "NAVI Protocol",
   scallop: "Scallop",
   bluefin: "Bluefin Lend",
+  suilend: "Suilend",
 };

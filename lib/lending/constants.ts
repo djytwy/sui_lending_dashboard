@@ -1,30 +1,40 @@
-import type { LendingAction, LendingAsset, LendingAssetSymbol, ProtocolCapability } from "./types";
+import type { LendingAction, LendingAsset, LendingAssetSymbol, LendingProtocolId, ProtocolCapability } from "./types";
 
-export const SUI_COIN_TYPE = "0x2::sui::SUI";
 export const NATIVE_USDC_COIN_TYPE =
   "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
+export const USDSUI_COIN_TYPE =
+  "0x44f838219cf67b058f3b37907b655f226153c18e33dfcd0da559a844fea9b1c1::usdsui::USDSUI";
+export const USDT_COIN_TYPE =
+  "0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT";
 
 export const LENDING_ASSETS: Record<LendingAssetSymbol, LendingAsset> = {
-  SUI: {
-    symbol: "SUI",
-    coinType: SUI_COIN_TYPE,
-    decimals: 9,
-    scallopCoinName: "sui",
-  },
   USDC: {
     symbol: "USDC",
     coinType: NATIVE_USDC_COIN_TYPE,
     decimals: 6,
     scallopCoinName: "usdc",
   },
+  USDSUI: {
+    symbol: "USDSUI",
+    coinType: USDSUI_COIN_TYPE,
+    decimals: 6,
+  },
+  USDT: {
+    symbol: "USDT",
+    coinType: USDT_COIN_TYPE,
+    decimals: 6,
+  },
 };
 
+export const STABLECOIN_ASSET_SYMBOLS = Object.keys(LENDING_ASSETS) as LendingAssetSymbol[];
+export const STABLECOIN_ASSETS = STABLECOIN_ASSET_SYMBOLS.map((symbol) => LENDING_ASSETS[symbol]);
+
 export const LENDING_ACTION_LABELS: Record<LendingAction, string> = {
-  deposit: "存入抵押物",
-  withdraw: "取款",
-  borrow: "借款",
-  repay: "还款",
-  claimRewards: "领取激励",
+  deposit: "Deposit",
+  withdraw: "Withdraw",
+  borrow: "Borrow",
+  repay: "Repay",
+  claimRewards: "Claim rewards",
 };
 
 export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
@@ -34,7 +44,7 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
     sdkPackage: "Bluefin Lend market SDK source",
     state: "ready",
     actions: ["deposit", "borrow", "repay", "claimRewards"],
-    description: "通过 Bluefin Lend 市场源构造 supply / borrow / repay / claimRewards 交易。",
+    description: "Build supply / borrow / repay / claimRewards transactions through the Bluefin Lend market source.",
     requiredFields: {
       borrow: ["Bluefin Position Cap ID"],
       repay: ["Bluefin Position Cap ID"],
@@ -47,21 +57,22 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
     sdkPackage: "@scallop-io/sui-scallop-sdk",
     state: "ready",
     actions: ["deposit", "borrow", "repay", "claimRewards"],
-    description: "通过 Scallop SDK 构造 supply / borrow / repay / claimBorrowIncentive 交易。",
+    description: "Build supply / borrow / repay / claimBorrowIncentive transactions through the Scallop SDK.",
     requiredFields: {
       borrow: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
       repay: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
       claimRewards: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
     },
+    warning: "This SDK build exposes Scallop stablecoin support for USDC only.",
   },
   {
     id: "navi",
     name: "NAVI Protocol",
-    sdkPackage: "NAVI open-api + 原生 moveCall",
+    sdkPackage: "NAVI open-api + native moveCall",
     state: "ready",
     actions: ["deposit", "withdraw"],
     description:
-      "官方 SDK 与 @mysten/sui v2 不兼容，改为从 NAVI open-api 拉取链上配置并以原生 moveCall 构造 supply / withdraw 交易。",
+      "The official SDK is incompatible with @mysten/sui v2, so this adapter pulls on-chain config from the NAVI open-api and builds supply / withdraw transactions with native moveCall.",
     requiredFields: {},
   },
   {
@@ -69,8 +80,8 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
     name: "Suilend",
     sdkPackage: "@suilend/sdk",
     state: "ready",
-    actions: ["deposit"],
-    description: "通过 Suilend SDK 构造 deposit 交易；若钱包尚无 obligation，会在同笔交易中自动创建。",
+    actions: ["deposit", "withdraw", "claimRewards"],
+    description: "Build deposit, withdraw, and claim reward transactions through the Suilend SDK; if the wallet has no obligation yet, create one in the same transaction for deposits.",
     requiredFields: {},
   },
 ];
@@ -81,4 +92,14 @@ export function getAsset(symbol: LendingAssetSymbol) {
 
 export function getProtocolCapability(id: string) {
   return PROTOCOL_CAPABILITIES.find((protocol) => protocol.id === id);
+}
+
+export function isLendingAssetSupported(protocol: LendingProtocolId, symbol: LendingAssetSymbol) {
+  const asset = getAsset(symbol);
+  if (protocol === "scallop") return Boolean(asset.scallopCoinName);
+  return true;
+}
+
+export function firstSupportedLendingAsset(protocol: LendingProtocolId) {
+  return STABLECOIN_ASSET_SYMBOLS.find((symbol) => isLendingAssetSupported(protocol, symbol)) ?? STABLECOIN_ASSET_SYMBOLS[0];
 }

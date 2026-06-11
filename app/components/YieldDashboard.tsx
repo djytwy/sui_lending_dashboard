@@ -2,7 +2,14 @@
 
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LENDING_ACTION_LABELS, LENDING_ASSETS, PROTOCOL_CAPABILITIES } from "@/lib/lending/constants";
+import {
+  LENDING_ACTION_LABELS,
+  LENDING_ASSETS,
+  PROTOCOL_CAPABILITIES,
+  STABLECOIN_ASSETS,
+  firstSupportedLendingAsset,
+  isLendingAssetSupported,
+} from "@/lib/lending/constants";
 import { lendingAdapters } from "@/lib/lending/adapters";
 import type { LendingAction, LendingAssetSymbol, LendingFormInput, LendingProtocolId, RewardRow } from "@/lib/lending/types";
 import type {
@@ -39,12 +46,18 @@ const PROTOCOL_META: Record<
     glow: "shadow-[0_0_36px_rgba(75,216,255,0.15)]",
     label: "Lending",
   },
+  suilend: {
+    accent: "#FF8E5C",
+    glow: "shadow-[0_0_36px_rgba(255,142,92,0.13)]",
+    label: "Lending",
+  },
 };
 
 const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   navi: "NAVI Protocol",
   scallop: "Scallop",
   bluefin: "Bluefin Lend",
+  suilend: "Suilend",
 };
 
 const PROTOCOL_TOTAL = Object.keys(PROTOCOL_META).length;
@@ -197,21 +210,21 @@ export default function YieldDashboard() {
             </div>
             <div>
               <p className="text-xs font-medium uppercase text-[#8585B8]">Sui mainnet yield router</p>
-              <h1 className="text-2xl font-semibold text-white sm:text-3xl">USDC 实时收益面板</h1>
+              <h1 className="text-2xl font-semibold text-white sm:text-3xl">Stablecoin Live Yield Dashboard</h1>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill label="Sui" value="Mainnet" tone="violet" />
-            <StatusPill label="资产" value="USDC" tone="green" />
-            <StatusPill label="刷新" value="30s" tone="yellow" />
+            <StatusPill label="Assets" value="USDC / USDSUI / USDT" tone="green" />
+            <StatusPill label="Refresh" value="30s" tone="yellow" />
             <button
               className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#9FFFBF] hover:text-[#9FFFBF] disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isLoading || isRefreshing}
               onClick={() => refresh(true)}
               type="button"
             >
-              {isRefreshing ? "刷新中" : "刷新数据"}
+              {isRefreshing ? "Refreshing" : "Refresh data"}
             </button>
           </div>
         </header>
@@ -220,7 +233,7 @@ export default function YieldDashboard() {
           <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)]">
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-sm text-[#8585B8]">当前最高 USDC 收益</p>
+                <p className="text-sm text-[#8585B8]">Current best USDC benchmark yield</p>
                 <div className="mt-3 flex items-end gap-3">
                   <span className="text-5xl font-semibold text-white sm:text-6xl">
                     {best?.apy === null || !best ? "--" : formatPercent(best.apy)}
@@ -235,16 +248,16 @@ export default function YieldDashboard() {
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <MetricBox label="协议" value={best?.protocolName ?? "--"} />
-              <MetricBox label="产品" value={best?.asset ?? "--"} />
+              <MetricBox label="Protocol" value={best?.protocolName ?? "--"} />
+              <MetricBox label="Product" value={best?.asset ?? "--"} />
               <MetricBox label="TVL" value={formatCurrency(best?.tvlUsd)} />
             </div>
 
             <div className="mt-6 rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-white">{best?.product ?? "等待实时收益数据"}</p>
-                  <p className="mt-1 text-sm text-[#a8a8c7]">{best?.note ?? "正在从收益源加载 Sui USDC 市场。"}</p>
+                  <p className="text-sm font-semibold text-white">{best?.product ?? "Waiting for live yield data"}</p>
+                  <p className="mt-1 text-sm text-[#a8a8c7]">{best?.note ?? "Loading Sui stablecoin markets from yield sources."}</p>
                 </div>
                 <div className="text-left sm:text-right">
                   <p className="text-xs text-[#8585B8]">APR</p>
@@ -257,8 +270,8 @@ export default function YieldDashboard() {
           <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-[#8585B8]">数据源状态</p>
-                <h2 className="mt-1 text-xl font-semibold text-white">实时聚合路径</h2>
+                <p className="text-sm text-[#8585B8]">Data source status</p>
+                <h2 className="mt-1 text-xl font-semibold text-white">Live aggregation path</h2>
               </div>
               <QualityBadge status={error ? "unavailable" : "live"} />
             </div>
@@ -280,16 +293,21 @@ export default function YieldDashboard() {
                 value="Bluefin USDC lend market"
               />
               <SourceRow
-                label="前端轮询"
+                label="Suilend SDK"
+                status={data?.sources.suilendSdk ?? "partial"}
+                value="Stablecoin deposit adapter"
+              />
+              <SourceRow
+                label="Client polling"
                 status="live"
-                value={data ? `${Math.round(data.refreshIntervalMs / 1000)} 秒` : "30 秒"}
+                value={data ? `${Math.round(data.refreshIntervalMs / 1000)}s` : "30s"}
               />
             </div>
 
             <div className="mt-5 border-t border-[#373A4D] pt-4">
-              <p className="text-xs text-[#8585B8]">最后更新</p>
+              <p className="text-xs text-[#8585B8]">Last updated</p>
               <p className="mt-1 text-sm font-medium text-white">{formatDate(data?.generatedAt)}</p>
-              {error ? <p className="mt-3 text-sm text-[#FF4D29]">加载失败：{error}</p> : null}
+              {error ? <p className="mt-3 text-sm text-[#FF4D29]">Load failed: {error}</p> : null}
               {!error && data?.warnings.length ? (
                 <p className="mt-3 text-sm text-[#FFEA4B]">{data.warnings[0]}</p>
               ) : null}
@@ -311,30 +329,37 @@ export default function YieldDashboard() {
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
-            <ProtocolCard key={opportunity.id} opportunity={opportunity} loading={isLoading && !data} />
+            <ProtocolCard
+              key={opportunity.id}
+              opportunity={opportunity}
+              loading={isLoading && !data}
+              onDepositComplete={() => {
+                if (account?.address) void refreshPositions(account.address, true);
+              }}
+            />
           ))}
         </section>
 
         <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
           <div className="flex flex-col gap-2 border-b border-[#373A4D] p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm text-[#8585B8]">APR / APY 明细</p>
-              <h2 className="text-xl font-semibold text-white">USDC 收益列表</h2>
+              <p className="text-sm text-[#8585B8]">APR / APY details</p>
+              <h2 className="text-xl font-semibold text-white">Stablecoin yield list</h2>
             </div>
-            <p className="text-sm text-[#a8a8c7]">Scallop / Bluefin / NAVI 使用协议 SDK 或同源 API。</p>
+            <p className="text-sm text-[#a8a8c7]">Scallop / Bluefin / NAVI use protocol SDKs or first-party APIs.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] table-fixed text-left">
               <thead className="text-xs uppercase text-[#8585B8]">
                 <tr className="border-b border-[#373A4D]">
-                  <th className="w-[180px] px-4 py-3 font-medium">协议</th>
-                  <th className="w-[220px] px-4 py-3 font-medium">产品</th>
+                  <th className="w-[180px] px-4 py-3 font-medium">Protocol</th>
+                  <th className="w-[220px] px-4 py-3 font-medium">Product</th>
                   <th className="w-[120px] px-4 py-3 text-right font-medium">APR</th>
                   <th className="w-[120px] px-4 py-3 text-right font-medium">APY</th>
-                  <th className="w-[180px] px-4 py-3 font-medium">加成明细</th>
+                  <th className="w-[180px] px-4 py-3 font-medium">Boost details</th>
                   <th className="w-[140px] px-4 py-3 text-right font-medium">TVL</th>
-                  <th className="w-[130px] px-4 py-3 font-medium">风险</th>
-                  <th className="w-[150px] px-4 py-3 font-medium">来源</th>
+                  <th className="w-[130px] px-4 py-3 font-medium">Risk</th>
+                  <th className="w-[150px] px-4 py-3 font-medium">Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -375,13 +400,14 @@ function LendingWorkbench() {
   const account = useCurrentAccount();
   const signAndExecute = useSignAndExecuteTransaction();
   const [form, setForm] = useState(DEFAULT_LENDING_FORM);
-  const [status, setStatus] = useState<string>("选择协议、动作和资产后执行交易。");
+  const [status, setStatus] = useState<string>("Select a protocol, action, and asset before executing a transaction.");
   const [rewards, setRewards] = useState<RewardRow[]>([]);
   const [isQueryingRewards, setIsQueryingRewards] = useState(false);
 
   const selectedProtocol = PROTOCOL_CAPABILITIES.find((item) => item.id === form.protocol) ?? PROTOCOL_CAPABILITIES[0];
   const selectedAsset = LENDING_ASSETS[form.asset];
-  const canSubmit = Boolean(account?.address) && selectedProtocol.state !== "sdkBlocked" && !signAndExecute.isPending;
+  const selectedAssetSupported = form.action === "claimRewards" || isLendingAssetSupported(form.protocol, form.asset);
+  const canSubmit = Boolean(account?.address) && selectedProtocol.state !== "sdkBlocked" && !signAndExecute.isPending && selectedAssetSupported;
 
   const updateForm = <Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) => {
     setForm((current) => ({
@@ -392,31 +418,32 @@ function LendingWorkbench() {
 
   const updateProtocol = (protocolId: LendingProtocolId) => {
     const capability = PROTOCOL_CAPABILITIES.find((item) => item.id === protocolId);
-    setForm((current) => ({
-      ...current,
-      protocol: protocolId,
-      // 各协议支持的动作不同，切换协议时把不支持的动作重置为该协议的第一个动作。
-      action:
-        capability && !capability.actions.includes(current.action)
-          ? capability.actions[0]
-          : current.action,
-    }));
+    setForm((current) => {
+      const action = capability && !capability.actions.includes(current.action) ? capability.actions[0] : current.action;
+      return {
+        ...current,
+        protocol: protocolId,
+        // Protocols support different actions and assets; reset unsupported selections when switching protocols.
+        action,
+        asset: isLendingAssetSupported(protocolId, current.asset) ? current.asset : firstSupportedLendingAsset(protocolId),
+      };
+    });
   };
 
   const execute = async () => {
     if (!account?.address) {
-      setStatus("请先连接 Sui 钱包。");
+      setStatus("Connect your Sui wallet first.");
       return;
     }
 
     const adapter = lendingAdapters[form.protocol];
     if (!adapter) {
-      setStatus("当前协议没有可用适配器。");
+      setStatus("No adapter is available for the selected protocol.");
       return;
     }
 
     try {
-      setStatus("正在用协议 SDK 构造交易...");
+      setStatus("Building the transaction with the protocol SDK...");
       const { tx, summary } = await adapter.buildTransaction({
         input: {
           ...form,
@@ -424,21 +451,21 @@ function LendingWorkbench() {
         },
       });
 
-      setStatus("等待钱包签名...");
+      setStatus("Waiting for wallet signature...");
       const result = await signAndExecute.mutateAsync({
         transaction: tx,
       });
 
       const digest = "digest" in result ? result.digest : undefined;
-      setStatus(digest ? `${summary} 已提交：${digest}` : `${summary} 已提交。`);
+      setStatus(digest ? `${summary} submitted: ${digest}` : `${summary} submitted.`);
     } catch (reason) {
-      setStatus(reason instanceof Error ? reason.message : "交易构造或执行失败");
+      setStatus(reason instanceof Error ? reason.message : "Transaction build or execution failed");
     }
   };
 
   const queryRewards = async () => {
     if (!account?.address) {
-      setStatus("请先连接 Sui 钱包。");
+      setStatus("Connect your Sui wallet first.");
       return;
     }
 
@@ -451,9 +478,9 @@ function LendingWorkbench() {
         )
       ).flat();
       setRewards(rows);
-      setStatus(rows.length ? `查询到 ${rows.length} 条可展示激励。` : "当前未查询到可领取激励。");
+      setStatus(rows.length ? `Found ${rows.length} displayable rewards.` : "No claimable rewards were found.");
     } catch (reason) {
-      setStatus(reason instanceof Error ? reason.message : "激励查询失败");
+      setStatus(reason instanceof Error ? reason.message : "Reward query failed");
     } finally {
       setIsQueryingRewards(false);
     }
@@ -464,14 +491,14 @@ function LendingWorkbench() {
       <div className="flex flex-col gap-3 border-b border-[#373A4D] p-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-sm text-[#8585B8]">Lending execution</p>
-          <h2 className="text-xl font-semibold text-white">借贷聚合操作台</h2>
+          <h2 className="text-xl font-semibold text-white">Lending Aggregation Workbench</h2>
         </div>
         <ConnectButton />
       </div>
 
       <div className="grid gap-5 p-4 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="grid gap-4 md:grid-cols-2">
-          <Field label="协议">
+          <Field label="Protocol">
             <select
               className="control"
               value={form.protocol}
@@ -485,7 +512,7 @@ function LendingWorkbench() {
             </select>
           </Field>
 
-          <Field label="动作">
+          <Field label="Action">
             <select
               className="control"
               value={form.action}
@@ -499,26 +526,30 @@ function LendingWorkbench() {
             </select>
           </Field>
 
-          <Field label="资产">
+          <Field label="Asset">
             <select
               className="control"
               value={form.asset}
               onChange={(event) => updateForm("asset", event.target.value as LendingAssetSymbol)}
               disabled={form.action === "claimRewards"}
             >
-              {Object.values(LENDING_ASSETS).map((asset) => (
-                <option key={asset.symbol} value={asset.symbol}>
+              {STABLECOIN_ASSETS.map((asset) => (
+                <option
+                  key={asset.symbol}
+                  value={asset.symbol}
+                  disabled={form.action !== "claimRewards" && !isLendingAssetSupported(form.protocol, asset.symbol)}
+                >
                   {asset.symbol}
                 </option>
               ))}
             </select>
           </Field>
 
-          <Field label={`金额 ${selectedAsset.symbol}`}>
+          <Field label={`Amount ${selectedAsset.symbol}`}>
             <input
               className="control"
               inputMode="decimal"
-              placeholder={form.action === "claimRewards" ? "领取激励无需金额" : "0.00"}
+              placeholder={form.action === "claimRewards" ? "No amount is required to claim rewards" : "0.00"}
               value={form.amount}
               onChange={(event) => updateForm("amount", event.target.value)}
               disabled={form.action === "claimRewards"}
@@ -577,8 +608,8 @@ function LendingWorkbench() {
           </div>
 
           <div className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
-            <p className="text-xs text-[#8585B8]">钱包地址</p>
-            <p className="mt-1 break-all text-sm font-medium text-white">{account?.address ?? "未连接"}</p>
+            <p className="text-xs text-[#8585B8]">Wallet address</p>
+            <p className="mt-1 break-all text-sm font-medium text-white">{account?.address ?? "Not connected"}</p>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -588,7 +619,7 @@ function LendingWorkbench() {
               onClick={execute}
               type="button"
             >
-              {signAndExecute.isPending ? "执行中" : "构造并签名执行"}
+              {signAndExecute.isPending ? "Executing" : "Build, sign, and execute"}
             </button>
             <button
               className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#7F7FFF] disabled:cursor-not-allowed disabled:opacity-50"
@@ -596,11 +627,15 @@ function LendingWorkbench() {
               onClick={queryRewards}
               type="button"
             >
-              {isQueryingRewards ? "查询中" : "查询激励"}
+              {isQueryingRewards ? "Querying" : "Query rewards"}
             </button>
           </div>
 
-          <p className="min-h-10 rounded-lg border border-[#373A4D] bg-[#151722] p-3 text-sm text-[#dfdfed]">{status}</p>
+          <p className="min-h-10 rounded-lg border border-[#373A4D] bg-[#151722] p-3 text-sm text-[#dfdfed]">
+            {selectedAssetSupported
+              ? status
+              : selectedProtocol.name + " does not support " + selectedAsset.symbol + " through this adapter yet."}
+          </p>
 
           {rewards.length ? (
             <div className="space-y-2">
@@ -640,7 +675,7 @@ function PositionsPanel({
       <div className="flex flex-col gap-3 border-b border-[#373A4D] p-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-sm text-[#8585B8]">Wallet positions</p>
-          <h2 className="text-xl font-semibold text-white">协议仓位</h2>
+          <h2 className="text-xl font-semibold text-white">Protocol positions</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {data ? (
@@ -659,15 +694,15 @@ function PositionsPanel({
             onClick={onRefresh}
             type="button"
           >
-            {loading ? "查询中" : "刷新仓位"}
+            {loading ? "Querying" : "Refresh positions"}
           </button>
         </div>
       </div>
 
       {!address ? (
-        <div className="p-4 text-sm text-[#a8a8c7]">连接钱包后显示 Scallop、Bluefin Lend 和 NAVI 的 USDC 仓位。</div>
+        <div className="p-4 text-sm text-[#a8a8c7]">Connect a wallet to view stablecoin positions on Scallop, Bluefin Lend, NAVI, and Suilend.</div>
       ) : error ? (
-        <div className="p-4 text-sm text-[#FF4D29]">仓位加载失败：{error}</div>
+        <div className="p-4 text-sm text-[#FF4D29]">Position load failed: {error}</div>
       ) : loading && !data ? (
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
           {skeletonPositions().map((position) => (
@@ -682,7 +717,7 @@ function PositionsPanel({
         </div>
       ) : (
         <div className="p-4">
-          <p className="text-sm text-[#a8a8c7]">当前钱包没有查询到可展示的 Scallop / Bluefin Lend / NAVI USDC 仓位。</p>
+          <p className="text-sm text-[#a8a8c7]">No displayable Scallop / Bluefin Lend / NAVI / Suilend stablecoin positions were found for this wallet.</p>
           {data?.warnings[0] ? <p className="mt-2 text-sm text-[#FFEA4B]">{data.warnings[0]}</p> : null}
         </div>
       )}
@@ -719,13 +754,13 @@ function PositionCard({
 
   const runAction = async (action: "withdraw" | "claimRewards") => {
     if (!account?.address) {
-      setActionStatus("请先连接 Sui 钱包。");
+      setActionStatus("Connect your Sui wallet first.");
       return;
     }
 
     try {
       setIsBuilding(true);
-      setActionStatus("正在构造交易...");
+      setActionStatus("Building transaction...");
       const { buildPositionActionTransaction } = await import("@/lib/lending/position-actions");
       const { tx, summary } = await buildPositionActionTransaction({
         address: account.address,
@@ -734,14 +769,14 @@ function PositionCard({
         percent: action === "withdraw" ? withdrawPercent : undefined,
       });
 
-      setActionStatus("等待钱包签名...");
+      setActionStatus("Waiting for wallet signature...");
       const result = await signAndExecute.mutateAsync({ transaction: tx });
       const digest = "digest" in result ? result.digest : undefined;
-      setActionStatus(digest ? `${summary} 已提交：${digest}` : `${summary} 已提交。`);
+      setActionStatus(digest ? `${summary} submitted: ${digest}` : `${summary} submitted.`);
       setShowWithdrawPanel(false);
       onRefresh?.();
     } catch (reason) {
-      setActionStatus(reason instanceof Error ? reason.message : "交易构造或执行失败");
+      setActionStatus(reason instanceof Error ? reason.message : "Transaction build or execution failed");
     } finally {
       setIsBuilding(false);
     }
@@ -764,7 +799,7 @@ function PositionCard({
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div>
-          <p className="text-xs text-[#8585B8]">资产</p>
+          <p className="text-xs text-[#8585B8]">Asset</p>
           <p className="mt-1 truncate text-sm font-semibold text-white">{loading ? "--" : position.asset}</p>
         </div>
         <div>
@@ -774,17 +809,17 @@ function PositionCard({
       </div>
 
       <div className="mt-4">
-        <p className="text-xs text-[#8585B8]">数量</p>
+        <p className="text-xs text-[#8585B8]">Amount</p>
         <p className="mt-1 truncate text-lg font-semibold text-white">{loading ? "--" : position.amount}</p>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
-          <p className="text-xs text-[#8585B8]">价值</p>
+          <p className="text-xs text-[#8585B8]">Value</p>
           <p className="mt-1 font-semibold text-[#9FFFBF]">{loading ? "--" : formatCurrency(position.valueUsd)}</p>
         </div>
         <div>
-          <p className="text-xs text-[#8585B8]">奖励</p>
+          <p className="text-xs text-[#8585B8]">Rewards</p>
           <p className="mt-1 truncate font-semibold text-white">{loading ? "--" : rewardLabel(position)}</p>
         </div>
       </div>
@@ -801,7 +836,7 @@ function PositionCard({
                 onClick={() => setShowWithdrawPanel((current) => !current)}
                 type="button"
               >
-                取款
+                Withdraw
               </button>
             ) : null}
             <button
@@ -810,13 +845,13 @@ function PositionCard({
               onClick={() => runAction("claimRewards")}
               type="button"
             >
-              {actionMeta.claimable ? "领取激励" : "暂无激励"}
+              {actionMeta.claimable ? "Claim rewards" : "No rewards"}
             </button>
           </div>
 
           {showWithdrawPanel && actionMeta.withdrawable ? (
             <div className="mt-3 rounded-lg border border-[#373A4D] bg-[#151722] p-3">
-              <p className="text-xs text-[#8585B8]">取款比例</p>
+              <p className="text-xs text-[#8585B8]">Withdrawal percent</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {WITHDRAW_PERCENT_PRESETS.map((preset) => (
                   <button
@@ -854,7 +889,7 @@ function PositionCard({
                 onClick={() => runAction("withdraw")}
                 type="button"
               >
-                {isBusy ? "执行中" : `确认取款 ${withdrawPercent}%`}
+                {isBusy ? "Executing" : `Confirm withdraw ${withdrawPercent}%`}
               </button>
             </div>
           ) : null}
@@ -873,15 +908,74 @@ function PositionCard({
 function ProtocolCard({
   opportunity,
   loading,
+  onDepositComplete,
 }: {
   opportunity: YieldOpportunity;
   loading: boolean;
+  onDepositComplete?: () => void;
 }) {
   const meta = PROTOCOL_META[opportunity.protocol];
+  const account = useCurrentAccount();
+  const signAndExecute = useSignAndExecuteTransaction();
+  const protocol: LendingProtocolId = opportunity.protocol;
+  const [selectedAsset, setSelectedAsset] = useState<LendingAssetSymbol>("USDC");
+  const [amount, setAmount] = useState("");
+  const [depositStatus, setDepositStatus] = useState<string | null>(null);
+  const [isBuildingDeposit, setIsBuildingDeposit] = useState(false);
   const barWidth = Math.min(Math.max(opportunity.apy ?? 0, 0), 60);
+  const selectedAssetMeta = LENDING_ASSETS[selectedAsset];
+  const assetSupported = isLendingAssetSupported(protocol, selectedAsset);
+  const isBusy = isBuildingDeposit || signAndExecute.isPending;
+  const canDeposit = Boolean(account?.address) && !loading && assetSupported && amount.trim().length > 0 && !isBusy;
+
+
+  const executeDeposit = async () => {
+    if (!account?.address) {
+      setDepositStatus("Connect your Sui wallet first.");
+      return;
+    }
+
+    const adapter = lendingAdapters[protocol];
+    if (!adapter) {
+      setDepositStatus("No adapter is available for this protocol.");
+      return;
+    }
+    if (!assetSupported) {
+      setDepositStatus(opportunity.protocolName + " does not support " + selectedAsset + " through this adapter yet.");
+      return;
+    }
+
+    try {
+      setIsBuildingDeposit(true);
+      setDepositStatus("Building deposit transaction...");
+      const { tx, summary } = await adapter.buildTransaction({
+        input: {
+          action: "deposit",
+          address: account.address,
+          amount,
+          asset: selectedAsset,
+          bluefinPositionCapId: "",
+          protocol,
+          scallopObligationId: "",
+          scallopObligationKeyId: "",
+        },
+      });
+
+      setDepositStatus("Waiting for wallet signature...");
+      const result = await signAndExecute.mutateAsync({ transaction: tx });
+      const digest = "digest" in result ? result.digest : undefined;
+      setDepositStatus(digest ? summary + " submitted: " + digest : summary + " submitted.");
+      setAmount("");
+      onDepositComplete?.();
+    } catch (reason) {
+      setDepositStatus(reason instanceof Error ? reason.message : "Deposit transaction failed");
+    } finally {
+      setIsBuildingDeposit(false);
+    }
+  };
 
   return (
-    <article className={`min-h-[252px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 ${meta.glow}`}>
+    <article className={"min-h-[356px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 " + meta.glow}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <div
@@ -908,7 +1002,7 @@ function ProtocolCard({
           className="h-2 rounded-md"
           style={{
             backgroundColor: meta.accent,
-            width: `${loading ? 0 : barWidth}%`,
+            width: (loading ? 0 : barWidth) + "%",
           }}
         />
       </div>
@@ -929,6 +1023,55 @@ function ProtocolCard({
       </div>
 
       <p className="mt-4 min-h-10 text-sm text-[#a8a8c7]">{opportunity.product}</p>
+
+      <div className="mt-4 border-t border-[#373A4D] pt-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-white">Quick deposit</p>
+          <span className="rounded-md border border-[#373A4D] bg-[#0f111b] px-2 py-1 text-xs font-semibold text-[#dfdfed]">
+            {selectedAssetMeta.symbol}
+          </span>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-[0.9fr_1.1fr]">
+          <select
+            className="control h-10"
+            value={selectedAsset}
+            onChange={(event) => setSelectedAsset(event.target.value as LendingAssetSymbol)}
+            disabled={loading || isBusy}
+          >
+            {STABLECOIN_ASSETS.map((asset) => (
+              <option key={asset.symbol} value={asset.symbol} disabled={!isLendingAssetSupported(protocol, asset.symbol)}>
+                {asset.symbol}
+              </option>
+            ))}
+          </select>
+          <input
+            className="control h-10"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+            disabled={loading || isBusy}
+          />
+        </div>
+        {!assetSupported ? (
+          <p className="mt-2 text-xs text-[#FFEA4B]">
+            {opportunity.protocolName} does not support {selectedAsset} through this adapter yet.
+          </p>
+        ) : null}
+        <button
+          className="mt-3 h-10 w-full rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-3 text-sm font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!canDeposit}
+          onClick={executeDeposit}
+          type="button"
+        >
+          {!account?.address ? "Connect wallet" : isBusy ? "Executing" : "Deposit"}
+        </button>
+        {depositStatus ? (
+          <p className="mt-3 break-all rounded-lg border border-[#373A4D] bg-[#0f111b] p-2.5 text-xs text-[#dfdfed]">
+            {depositStatus}
+          </p>
+        ) : null}
+      </div>
     </article>
   );
 }
@@ -1022,8 +1165,8 @@ function skeletonProtocols(): YieldOpportunity[] {
     id: `${protocol}-loading`,
     protocol,
     protocolName: PROTOCOL_NAMES[protocol],
-    product: "Loading USDC market",
-    asset: "USDC",
+    product: "Loading stablecoin market",
+    asset: "Stablecoins",
     apr: null,
     apy: null,
     tvlUsd: null,
@@ -1074,14 +1217,14 @@ function formatCurrency(value: number | null | undefined) {
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "--";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value));
 }
 
 function sideLabel(side: UserLendingPosition["side"]) {
-  return side === "supply" ? "存款" : "借款";
+  return side === "supply" ? "Supply" : "Borrow";
 }
 
 function rewardLabel(position: UserLendingPosition) {
@@ -1105,8 +1248,8 @@ function breakdownLabel(item: YieldOpportunity) {
 }
 
 function riskLabel(item: YieldOpportunity) {
-  if (item.ilRisk === "no" && item.exposure === "single") return "单资产";
+  if (item.ilRisk === "no" && item.exposure === "single") return "Single asset";
   if (item.ilRisk === "yes") return "LP / IL";
-  if (item.exposure === "multi") return "多资产";
-  return item.ilRisk === "unknown" ? "未知" : item.ilRisk;
+  if (item.exposure === "multi") return "Multi-asset";
+  return item.ilRisk === "unknown" ? "Unknown" : item.ilRisk;
 }

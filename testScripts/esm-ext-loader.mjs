@@ -1,6 +1,6 @@
-// 部分 SDK（如 @suilend/sdk）的 ESM 产物使用无扩展名相对导入，打包器能解析但纯 Node 不行。
-// 该 loader 在解析失败时补 ".js" / "/index.js" 再试；并为 CJS 的 lodash 提供命名导出 shim。
-// 仅供 scripts/ 下的验证脚本使用。
+// Some SDK ESM builds, such as @suilend/sdk, use extensionless relative imports that bundlers resolve but plain Node cannot.
+// This loader retries failed resolutions with ".js" / "/index.js" and provides named-export shims for CJS lodash.
+// Only used by validation scripts under scripts/.
 import { fileURLToPath } from "node:url";
 
 export async function load(url, context, nextLoad) {
@@ -30,7 +30,7 @@ export async function resolve(specifier, context, nextResolve) {
         try {
           return await nextResolve(candidate, context);
         } catch {
-          // 尝试下一个候选
+          // Try the next candidate
         }
       }
     }
