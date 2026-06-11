@@ -3,15 +3,12 @@
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  LENDING_ACTION_LABELS,
   LENDING_ASSETS,
-  PROTOCOL_CAPABILITIES,
   STABLECOIN_ASSETS,
-  firstSupportedLendingAsset,
   isLendingAssetSupported,
 } from "@/lib/lending/constants";
 import { lendingAdapters } from "@/lib/lending/adapters";
-import type { LendingAction, LendingAssetSymbol, LendingFormInput, LendingProtocolId, RewardRow } from "@/lib/lending/types";
+import type { LendingAssetSymbol, LendingProtocolId } from "@/lib/lending/types";
 import type {
   DataQuality,
   PositionsApiResponse,
@@ -62,16 +59,6 @@ const PROTOCOL_NAMES: Record<ProtocolId, string> = {
 
 const PROTOCOL_TOTAL = Object.keys(PROTOCOL_META).length;
 
-const DEFAULT_LENDING_FORM: Omit<LendingFormInput, "address"> = {
-  action: "deposit",
-  bluefinPositionCapId: "",
-  amount: "",
-  asset: "USDC",
-  protocol: "scallop",
-  scallopObligationId: "",
-  scallopObligationKeyId: "",
-};
-
 const QUALITY_LABEL: Record<DataQuality, string> = {
   live: "Live",
   partial: "Partial",
@@ -100,16 +87,13 @@ export default function YieldDashboard() {
   const account = useCurrentAccount();
   const [data, setData] = useState<YieldApiResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsApiResponse | null>(null);
   const [isLoadingPositions, setIsLoadingPositions] = useState(false);
   const [positionsError, setPositionsError] = useState<string | null>(null);
 
   const refresh = useCallback(async (silent = false) => {
-    if (silent) {
-      setIsRefreshing(true);
-    } else {
+    if (!silent) {
       setIsLoading(true);
     }
     setError(null);
@@ -128,8 +112,9 @@ export default function YieldDashboard() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to load yield data");
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      if (!silent) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -217,15 +202,7 @@ export default function YieldDashboard() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill label="Sui" value="Mainnet" tone="violet" />
             <StatusPill label="Assets" value="USDC / USDSUI / USDT" tone="green" />
-            <StatusPill label="Refresh" value="30s" tone="yellow" />
-            <button
-              className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#9FFFBF] hover:text-[#9FFFBF] disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoading || isRefreshing}
-              onClick={() => refresh(true)}
-              type="button"
-            >
-              {isRefreshing ? "Refreshing" : "Refresh data"}
-            </button>
+            <ConnectButton />
           </div>
         </header>
 
@@ -315,8 +292,6 @@ export default function YieldDashboard() {
           </div>
         </section>
 
-        <LendingWorkbench />
-
         <PositionsPanel
           address={account?.address ?? null}
           data={positionsData}
@@ -393,265 +368,6 @@ export default function YieldDashboard() {
         </section>
       </div>
     </main>
-  );
-}
-
-function LendingWorkbench() {
-  const account = useCurrentAccount();
-  const signAndExecute = useSignAndExecuteTransaction();
-  const [form, setForm] = useState(DEFAULT_LENDING_FORM);
-  const [status, setStatus] = useState<string>("Select a protocol, action, and asset before executing a transaction.");
-  const [rewards, setRewards] = useState<RewardRow[]>([]);
-  const [isQueryingRewards, setIsQueryingRewards] = useState(false);
-
-  const selectedProtocol = PROTOCOL_CAPABILITIES.find((item) => item.id === form.protocol) ?? PROTOCOL_CAPABILITIES[0];
-  const selectedAsset = LENDING_ASSETS[form.asset];
-  const selectedAssetSupported = form.action === "claimRewards" || isLendingAssetSupported(form.protocol, form.asset);
-  const canSubmit = Boolean(account?.address) && selectedProtocol.state !== "sdkBlocked" && !signAndExecute.isPending && selectedAssetSupported;
-
-  const updateForm = <Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) => {
-    setForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  };
-
-  const updateProtocol = (protocolId: LendingProtocolId) => {
-    const capability = PROTOCOL_CAPABILITIES.find((item) => item.id === protocolId);
-    setForm((current) => {
-      const action = capability && !capability.actions.includes(current.action) ? capability.actions[0] : current.action;
-      return {
-        ...current,
-        protocol: protocolId,
-        // Protocols support different actions and assets; reset unsupported selections when switching protocols.
-        action,
-        asset: isLendingAssetSupported(protocolId, current.asset) ? current.asset : firstSupportedLendingAsset(protocolId),
-      };
-    });
-  };
-
-  const execute = async () => {
-    if (!account?.address) {
-      setStatus("Connect your Sui wallet first.");
-      return;
-    }
-
-    const adapter = lendingAdapters[form.protocol];
-    if (!adapter) {
-      setStatus("No adapter is available for the selected protocol.");
-      return;
-    }
-
-    try {
-      setStatus("Building the transaction with the protocol SDK...");
-      const { tx, summary } = await adapter.buildTransaction({
-        input: {
-          ...form,
-          address: account.address,
-        },
-      });
-
-      setStatus("Waiting for wallet signature...");
-      const result = await signAndExecute.mutateAsync({
-        transaction: tx,
-      });
-
-      const digest = "digest" in result ? result.digest : undefined;
-      setStatus(digest ? `${summary} submitted: ${digest}` : `${summary} submitted.`);
-    } catch (reason) {
-      setStatus(reason instanceof Error ? reason.message : "Transaction build or execution failed");
-    }
-  };
-
-  const queryRewards = async () => {
-    if (!account?.address) {
-      setStatus("Connect your Sui wallet first.");
-      return;
-    }
-
-    try {
-      setIsQueryingRewards(true);
-      const rows = (
-        await Promise.all(
-          PROTOCOL_CAPABILITIES.filter((item) => item.state === "ready")
-            .map((item) => lendingAdapters[item.id]?.queryRewards?.(account.address) ?? Promise.resolve([])),
-        )
-      ).flat();
-      setRewards(rows);
-      setStatus(rows.length ? `Found ${rows.length} displayable rewards.` : "No claimable rewards were found.");
-    } catch (reason) {
-      setStatus(reason instanceof Error ? reason.message : "Reward query failed");
-    } finally {
-      setIsQueryingRewards(false);
-    }
-  };
-
-  return (
-    <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
-      <div className="flex flex-col gap-3 border-b border-[#373A4D] p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <p className="text-sm text-[#8585B8]">Lending execution</p>
-          <h2 className="text-xl font-semibold text-white">Lending Aggregation Workbench</h2>
-        </div>
-        <ConnectButton />
-      </div>
-
-      <div className="grid gap-5 p-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Protocol">
-            <select
-              className="control"
-              value={form.protocol}
-              onChange={(event) => updateProtocol(event.target.value as LendingProtocolId)}
-            >
-              {PROTOCOL_CAPABILITIES.map((protocol) => (
-                <option key={protocol.id} value={protocol.id}>
-                  {protocol.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Action">
-            <select
-              className="control"
-              value={form.action}
-              onChange={(event) => updateForm("action", event.target.value as LendingAction)}
-            >
-              {selectedProtocol.actions.map((action) => (
-                <option key={action} value={action}>
-                  {LENDING_ACTION_LABELS[action]}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Asset">
-            <select
-              className="control"
-              value={form.asset}
-              onChange={(event) => updateForm("asset", event.target.value as LendingAssetSymbol)}
-              disabled={form.action === "claimRewards"}
-            >
-              {STABLECOIN_ASSETS.map((asset) => (
-                <option
-                  key={asset.symbol}
-                  value={asset.symbol}
-                  disabled={form.action !== "claimRewards" && !isLendingAssetSupported(form.protocol, asset.symbol)}
-                >
-                  {asset.symbol}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label={`Amount ${selectedAsset.symbol}`}>
-            <input
-              className="control"
-              inputMode="decimal"
-              placeholder={form.action === "claimRewards" ? "No amount is required to claim rewards" : "0.00"}
-              value={form.amount}
-              onChange={(event) => updateForm("amount", event.target.value)}
-              disabled={form.action === "claimRewards"}
-            />
-          </Field>
-
-          {form.protocol === "bluefin" ? (
-            <Field label="Bluefin Position Cap ID" wide>
-              <input
-                className="control"
-                placeholder="0x..."
-                value={form.bluefinPositionCapId}
-                onChange={(event) => updateForm("bluefinPositionCapId", event.target.value)}
-              />
-            </Field>
-          ) : null}
-
-          {form.protocol === "scallop" ? (
-            <>
-              <Field label="Scallop Obligation ID">
-                <input
-                  className="control"
-                  placeholder="0x..."
-                  value={form.scallopObligationId}
-                  onChange={(event) => updateForm("scallopObligationId", event.target.value)}
-                />
-              </Field>
-              <Field label="Scallop Obligation Key ID">
-                <input
-                  className="control"
-                  placeholder="0x..."
-                  value={form.scallopObligationKeyId}
-                  onChange={(event) => updateForm("scallopObligationKeyId", event.target.value)}
-                />
-              </Field>
-            </>
-          ) : null}
-
-        </div>
-
-        <div className="flex flex-col gap-4 rounded-lg border border-[#373A4D] bg-[#0f111b] p-4">
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-white">{selectedProtocol.name}</p>
-              <span
-                className={`rounded-md border px-2 py-1 text-xs font-semibold ${selectedProtocol.state === "ready"
-                  ? "border-[#9FFFBF]/35 bg-[#9FFFBF]/10 text-[#9FFFBF]"
-                  : "border-[#FFEA4B]/35 bg-[#FFEA4B]/10 text-[#FFEA4B]"
-                  }`}
-              >
-                {selectedProtocol.state === "ready" ? "SDK ready" : "SDK blocked"}
-              </span>
-            </div>
-            <p className="mt-2 text-sm text-[#a8a8c7]">{selectedProtocol.description}</p>
-            {selectedProtocol.warning ? <p className="mt-2 text-sm text-[#FFEA4B]">{selectedProtocol.warning}</p> : null}
-          </div>
-
-          <div className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
-            <p className="text-xs text-[#8585B8]">Wallet address</p>
-            <p className="mt-1 break-all text-sm font-medium text-white">{account?.address ?? "Not connected"}</p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="h-10 rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-4 text-sm font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!canSubmit}
-              onClick={execute}
-              type="button"
-            >
-              {signAndExecute.isPending ? "Executing" : "Build, sign, and execute"}
-            </button>
-            <button
-              className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#7F7FFF] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!account?.address || isQueryingRewards}
-              onClick={queryRewards}
-              type="button"
-            >
-              {isQueryingRewards ? "Querying" : "Query rewards"}
-            </button>
-          </div>
-
-          <p className="min-h-10 rounded-lg border border-[#373A4D] bg-[#151722] p-3 text-sm text-[#dfdfed]">
-            {selectedAssetSupported
-              ? status
-              : selectedProtocol.name + " does not support " + selectedAsset.symbol + " through this adapter yet."}
-          </p>
-
-          {rewards.length ? (
-            <div className="space-y-2">
-              {rewards.map((reward, index) => (
-                <div key={`${reward.protocol}-${reward.label}-${index}`} className="rounded-lg border border-[#373A4D] bg-[#151722] p-3">
-                  <p className="text-sm font-semibold text-white">{reward.label}</p>
-                  <p className="mt-1 break-all text-xs text-[#a8a8c7]">
-                    {formatTokenAmountText(reward.amount)} {reward.coinType ?? ""}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -1140,23 +856,6 @@ function SourceRow({
       </div>
       <QualityBadge status={status} />
     </div>
-  );
-}
-
-function Field({
-  children,
-  label,
-  wide = false,
-}: {
-  children: React.ReactNode;
-  label: string;
-  wide?: boolean;
-}) {
-  return (
-    <label className={`flex flex-col gap-2 ${wide ? "md:col-span-2" : ""}`}>
-      <span className="text-xs font-medium text-[#8585B8]">{label}</span>
-      {children}
-    </label>
   );
 }
 
