@@ -94,17 +94,18 @@ type NaviPoolsResponse = {
 
 export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   const warnings: string[] = [];
-  const [scallopResult, bluefinResult, naviResult] = await Promise.allSettled([
+  const [scallopResult, bluefinResult, naviResult, suilendResult] = await Promise.allSettled([
     fetchScallopUsdcOpportunity(),
     fetchBluefinLendUsdcOpportunity(),
     fetchNaviUsdcOpportunity(),
+    fetchSuilendUsdcOpportunity(),
   ]);
 
   const opportunities: YieldOpportunity[] = [];
   let scallopSdk: DataQuality = "unavailable";
   let naviOpenApi: DataQuality = "unavailable";
   let bluefinLend: DataQuality = "unavailable";
-  const suilendSdk: DataQuality = "partial";
+  let suilendSdk: DataQuality = "unavailable";
 
   if (scallopResult.status === "fulfilled") {
     scallopSdk = scallopResult.value.status;
@@ -131,6 +132,15 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   } else {
     warnings.push(`NAVI open-api source failed: ${errorMessage(naviResult.reason)}`);
     opportunities.push(unavailableOpportunity("navi", "NAVI USDC supply market"));
+  }
+
+  if (suilendResult.status === "fulfilled") {
+    suilendSdk = suilendResult.value.status;
+    opportunities.push(suilendResult.value.opportunity);
+    warnings.push(...suilendResult.value.warnings);
+  } else {
+    warnings.push(`Suilend SDK source failed: ${errorMessage(suilendResult.reason)}`);
+    opportunities.push(unavailableOpportunity("suilend", "Suilend USDC reserve"));
   }
 
   const deduped = dedupeByProtocol(opportunities)
@@ -326,6 +336,97 @@ async function fetchNaviUsdcOpportunity(): Promise<{
       rateBreakdown: buildNaviBreakdown(apyInfo, borrowInfo),
     },
     status: pool.status === "active" ? "live" : "partial",
+    warnings: [],
+  };
+}
+
+async function fetchSuilendUsdcOpportunity(): Promise<{
+  opportunity: YieldOpportunity;
+  status: DataQuality;
+  warnings: string[];
+}> {
+  const [{ SuilendClient, LENDING_MARKET_ID, LENDING_MARKET_TYPE }, { SuiGrpcClient }, { parseReserve }] =
+    await Promise.all([
+      import("@suilend/sdk/client"),
+      import("@mysten/sui/grpc"),
+      import("@suilend/sdk/parsers/reserve"),
+    ]);
+
+  const grpcClient = new SuiGrpcClient({
+    network: "mainnet",
+    baseUrl: "https://fullnode.mainnet.sui.io:443",
+  });
+  const suilend = await SuilendClient.initialize(LENDING_MARKET_ID, LENDING_MARKET_TYPE, grpcClient);
+  const reserve = suilend.lendingMarket.reserves.find(
+    (item) => normalizeCoinType(item.coinType.name) === NATIVE_USDC_COIN_TYPE,
+  );
+
+  if (!reserve) {
+    return {
+      opportunity: unavailableOpportunity("suilend", "Suilend USDC reserve"),
+      status: "unavailable",
+      warnings: ["Suilend SDK did not return the native USDC reserve."],
+    };
+  }
+
+  const coinTypes = new Set<string>([normalizeCoinType(reserve.coinType.name)]);
+  for (const rewardManager of [reserve.depositsPoolRewardManager, reserve.borrowsPoolRewardManager]) {
+    for (const poolReward of rewardManager.poolRewards) {
+      if (poolReward) coinTypes.add(normalizeCoinType(poolReward.coinType.name));
+    }
+  }
+
+  const metadataEntries = await Promise.all(
+    Array.from(coinTypes).map(async (coinType) => {
+      const { coinMetadata } = await grpcClient.getCoinMetadata({ coinType });
+      return [coinType, coinMetadata] as const;
+    }),
+  );
+  const coinMetadataMap = Object.fromEntries(
+    metadataEntries.filter((entry): entry is [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null),
+  );
+  if (!coinMetadataMap[normalizeCoinType(reserve.coinType.name)]) {
+    return {
+      opportunity: unavailableOpportunity("suilend", "Suilend USDC reserve"),
+      status: "unavailable",
+      warnings: ["Suilend SDK returned the USDC reserve, but Sui coin metadata was unavailable."],
+    };
+  }
+
+  const parsedReserve = parseReserve(reserve, coinMetadataMap);
+  const depositApr = decimalToNumber(parsedReserve.depositAprPercent);
+  const borrowApr = decimalToNumber(parsedReserve.borrowAprPercent);
+  const utilization = decimalToNumber(parsedReserve.utilizationPercent);
+  const tvlUsd = decimalToNumber(parsedReserve.depositedAmountUsd);
+
+  return {
+    opportunity: {
+      id: "suilend-usdc",
+      protocol: "suilend",
+      protocolName: PROTOCOL_NAMES.suilend,
+      product: "Suilend USDC reserve",
+      asset: parsedReserve.token.symbol || "USDC",
+      apr: depositApr,
+      apy: aprToApy(depositApr),
+      tvlUsd: numberOrNull(tvlUsd),
+      baseApy: depositApr,
+      rewardApy: 0,
+      borrowApr,
+      utilization,
+      exposure: "single",
+      ilRisk: "no",
+      source: "Suilend SDK",
+      poolId: parsedReserve.id,
+      url: "https://suilend.fi/",
+      status: "live",
+      note: "Pulled from the Suilend SDK lending market reserve, including current USDC deposit and borrow APR fields.",
+      rateBreakdown: [
+        { label: "Deposit APR", value: depositApr, kind: "base" },
+        { label: "Deposit APY", value: aprToApy(depositApr), kind: "base" },
+        { label: "Borrow APR", value: borrowApr, kind: "borrow" },
+      ],
+    },
+    status: "live",
     warnings: [],
   };
 }
