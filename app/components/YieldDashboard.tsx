@@ -19,6 +19,7 @@ import type {
 } from "@/lib/yield-types";
 
 const CLIENT_REFRESH_INTERVAL_MS = 30_000;
+const DONATION_ADDRESS = process.env.NEXT_PUBLIC_DONATION_ADDRESS?.trim() ?? "";
 
 const PROTOCOL_META: Record<
   ProtocolId,
@@ -185,9 +186,9 @@ export default function YieldDashboard() {
   return (
     <main className="min-h-screen bg-[#0b0d14] text-[#fdfdff]">
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(102,103,238,0.16)_0%,rgba(11,13,20,0)_26%),linear-gradient(90deg,rgba(159,255,191,0.07),rgba(242,77,176,0.06),rgba(255,234,75,0.04))]" />
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:48px_48px] opacity-30" />
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-size-[48px_48px] opacity-30" />
 
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="relative mx-auto flex w-full max-w-9xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 border-b border-[#373A4D]/70 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-sm font-black text-[#9FFFBF]">
@@ -199,10 +200,18 @@ export default function YieldDashboard() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusPill label="Sui" value="Mainnet" tone="violet" />
-            <StatusPill label="Assets" value="USDC / USDSUI / USDT" tone="green" />
-            <ConnectButton />
+          <div className="flex flex-col items-start gap-2 lg:items-end">
+            <p className="max-w-full break-all text-xs text-[#8585B8]">
+              Sui donation address:{" "}
+              <span className="font-mono text-[#dfdfed]">
+                {DONATION_ADDRESS || "Set NEXT_PUBLIC_DONATION_ADDRESS"}
+              </span>
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill label="Sui" value="Mainnet" tone="violet" />
+              <StatusPill label="Assets" value="USDC / USDSUI / USDT" tone="green" />
+              <ConnectButton />
+            </div>
           </div>
         </header>
 
@@ -302,7 +311,7 @@ export default function YieldDashboard() {
           }}
         />
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard
               key={opportunity.id}
@@ -420,13 +429,13 @@ function PositionsPanel({
       ) : error ? (
         <div className="p-4 text-sm text-[#FF4D29]">Position load failed: {error}</div>
       ) : loading && !data ? (
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
           {skeletonPositions().map((position) => (
             <PositionCard key={position.id} position={position} loading />
           ))}
         </div>
       ) : positions.length ? (
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
           {positions.map((position) => (
             <PositionCard key={position.id} position={position} loading={false} onRefresh={onRefresh} />
           ))}
@@ -572,11 +581,10 @@ function PositionCard({
                 {WITHDRAW_PERCENT_PRESETS.map((preset) => (
                   <button
                     key={preset}
-                    className={`h-8 rounded-md border px-2.5 text-xs font-semibold transition ${
-                      withdrawPercent === preset
-                        ? "border-[#9FFFBF] bg-[#9FFFBF]/15 text-[#9FFFBF]"
-                        : "border-[#373A4D] bg-[#232534] text-white hover:border-[#9FFFBF]/60"
-                    }`}
+                    className={`h-8 rounded-md border px-2.5 text-xs font-semibold transition ${withdrawPercent === preset
+                      ? "border-[#9FFFBF] bg-[#9FFFBF]/15 text-[#9FFFBF]"
+                      : "border-[#373A4D] bg-[#232534] text-white hover:border-[#9FFFBF]/60"
+                      }`}
                     onClick={() => setWithdrawPercent(preset)}
                     type="button"
                   >
