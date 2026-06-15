@@ -1,6 +1,7 @@
 "use client";
 
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LENDING_ASSETS,
@@ -210,6 +211,12 @@ export default function YieldDashboard() {
             <div className="flex flex-wrap items-center gap-2">
               <StatusPill label="Sui" value="Mainnet" tone="violet" />
               <StatusPill label="Assets" value="USDC / USDSUI / USDT" tone="green" />
+              <Link
+                className="flex h-10 items-center rounded-lg border border-[#373A4D] bg-[#232534] px-3 text-sm font-semibold text-white transition hover:border-[#9FFFBF]"
+                href="/leaderboard"
+              >
+                Leaderboard
+              </Link>
               <ConnectButton />
             </div>
           </div>
@@ -689,6 +696,18 @@ function ProtocolCard({
       const result = await signAndExecute.mutateAsync({ transaction: tx });
       const digest = "digest" in result ? result.digest : undefined;
       setDepositStatus(digest ? summary + " submitted: " + digest : summary + " submitted.");
+      registerLeaderboardWallet({
+        address: account.address,
+        amount,
+        asset: selectedAsset,
+        digest,
+        protocol,
+      }).catch((leaderboardError) => {
+        setDepositStatus((current) =>
+          `${current ?? "Deposit submitted."} Leaderboard registration warning: ${leaderboardError instanceof Error ? leaderboardError.message : "unknown error"
+          }`,
+        );
+      });
       setAmount("");
       onDepositComplete?.();
     } catch (reason) {
@@ -798,6 +817,27 @@ function ProtocolCard({
       </div>
     </article>
   );
+}
+
+async function registerLeaderboardWallet(input: {
+  address: string;
+  protocol: LendingProtocolId;
+  asset: LendingAssetSymbol;
+  amount: string;
+  digest?: string;
+}) {
+  const response = await fetch("/api/leaderboard/register", {
+    body: JSON.stringify(input),
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Leaderboard registration failed: API ${response.status}`);
+  }
 }
 
 function StatusPill({

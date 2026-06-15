@@ -122,9 +122,11 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
     };
   }
 
-  const [bluefinResult, scallopResult] = await Promise.allSettled([
+  const [bluefinResult, scallopResult, suilendResult, naviResult] = await Promise.allSettled([
     withTimeout(fetchBluefinLendPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "Bluefin Lend positions"),
     withTimeout(fetchScallopPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "Scallop positions"),
+    withTimeout(fetchSuilendPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "Suilend positions"),
+    withTimeout(fetchNaviPositions(normalizedAddress), POSITION_SOURCE_TIMEOUT_MS, "NAVI positions"),
   ]);
 
   const positions: UserLendingPosition[] = [];
@@ -145,10 +147,21 @@ export async function getPositionsDashboardData(address: string): Promise<Positi
     warnings.push(`Scallop positions failed: ${errorMessage(scallopResult.reason)}`);
   }
 
-  warnings.push(
-    "NAVI positions are not queried yet because @naviprotocol/lending@1.4.6 is incompatible with the installed @mysten/sui v2 client; NAVI rates use open-api instead.",
-  );
-  warnings.push("Suilend positions are not queried yet; deposits are available through the Suilend SDK adapter.");
+  if (suilendResult.status === "fulfilled") {
+    sources.suilend = suilendResult.value.status;
+    positions.push(...suilendResult.value.positions);
+    warnings.push(...suilendResult.value.warnings);
+  } else {
+    warnings.push(`Suilend positions failed: ${errorMessage(suilendResult.reason)}`);
+  }
+
+  if (naviResult.status === "fulfilled") {
+    sources.navi = naviResult.value.status;
+    positions.push(...naviResult.value.positions);
+    warnings.push(...naviResult.value.warnings);
+  } else {
+    warnings.push(`NAVI positions failed: ${errorMessage(naviResult.reason)}`);
+  }
 
   return {
     generatedAt: new Date().toISOString(),
@@ -346,6 +359,142 @@ async function fetchScallopPositions(address: string): Promise<{
   };
 }
 
+async function fetchSuilendPositions(address: string): Promise<{
+  positions: UserLendingPosition[];
+  status: DataQuality;
+  warnings: string[];
+}> {
+  const [{ SuilendClient, LENDING_MARKET_ID, LENDING_MARKET_TYPE }, { SuiGrpcClient }, suilendInitialize] =
+    await Promise.all([
+      import("@suilend/sdk/client"),
+      import("@mysten/sui/grpc"),
+      import("@suilend/sdk/lib/initialize"),
+    ]);
+
+  const grpcClient = new SuiGrpcClient({
+    network: "mainnet",
+    baseUrl: "https://fullnode.mainnet.sui.io:443",
+  });
+  const client = await SuilendClient.initialize(LENDING_MARKET_ID, LENDING_MARKET_TYPE, grpcClient);
+  const { refreshedRawReserves, reserveMap } = await suilendInitialize.initializeSuilend(grpcClient, client);
+  const { obligations, strategyObligations } = await suilendInitialize.initializeObligations(
+    grpcClient,
+    client,
+    refreshedRawReserves,
+    reserveMap,
+    address,
+  );
+
+  const positions: UserLendingPosition[] = [];
+  for (const obligation of [...obligations, ...strategyObligations]) {
+    for (const deposit of obligation.deposits) {
+      const assetSymbol = stablecoinSymbolFromCoinType(deposit.coinType);
+      if (!assetSymbol) continue;
+      const amount = bigNumberToNumber(deposit.depositedAmount);
+      if (amount <= 0) continue;
+      const valueUsd = numberOrNull(bigNumberToNumber(deposit.depositedAmountUsd));
+      const decimals = deposit.reserve.mintDecimals ?? stablecoinDecimals(assetSymbol);
+
+      positions.push({
+        id: `suilend-${obligation.id}-deposit-${String(deposit.reserveArrayIndex)}`,
+        protocol: "suilend",
+        protocolName: PROTOCOL_NAMES.suilend,
+        product: `${assetSymbol} deposit`,
+        asset: assetSymbol,
+        side: "supply",
+        amount: formatAmount(amount),
+        valueUsd,
+        apr: numberOrNull(bigNumberToNumber(deposit.reserve.depositAprPercent)),
+        rewards: [],
+        positionId: obligation.id,
+        url: "https://app.suilend.fi/",
+        source: "Suilend SDK",
+        status: "live",
+        note: "Suilend obligation deposit position.",
+        action: {
+          withdrawable: true,
+          claimable: false,
+          decimals,
+          baseAmount: decimalToBaseUnits(bigNumberToPlainString(deposit.depositedAmount), decimals),
+        },
+      });
+    }
+  }
+
+  return {
+    positions,
+    status: "live",
+    warnings: [],
+  };
+}
+
+async function fetchNaviPositions(address: string): Promise<{
+  positions: UserLendingPosition[];
+  status: DataQuality;
+  warnings: string[];
+}> {
+  const { getLendingPositions } = await import("@naviprotocol/lending");
+  const lendingPositions = await getLendingPositions(address, {
+    cacheTime: 60_000,
+    env: "prod",
+  });
+
+  const positions: UserLendingPosition[] = [];
+  for (const position of lendingPositions) {
+    if (position.type === "navi-lending-supply" && position["navi-lending-supply"]) {
+      const supply = position["navi-lending-supply"];
+      const assetSymbol = stablecoinSymbolFromCoinType(supply.token.coinType);
+      if (!assetSymbol) continue;
+      positions.push({
+        id: position.id,
+        protocol: "navi",
+        protocolName: PROTOCOL_NAMES.navi,
+        product: `${assetSymbol} supply`,
+        asset: assetSymbol,
+        side: "supply",
+        amount: formatAmount(decimalToNumber(supply.amount)),
+        valueUsd: numberOrNull(decimalToNumber(supply.valueUSD)),
+        apr: naviSupplyApr(supply.pool),
+        rewards: [],
+        positionId: position.id,
+        url: "https://app.naviprotocol.io/",
+        source: "NAVI beta SDK",
+        status: "live",
+        note: `NAVI ${position.market} supply position.`,
+      });
+    }
+
+    if (position.type === "navi-lending-emode-supply" && position["navi-lending-emode-supply"]) {
+      const supply = position["navi-lending-emode-supply"];
+      const assetSymbol = stablecoinSymbolFromCoinType(supply.token.coinType);
+      if (!assetSymbol) continue;
+      positions.push({
+        id: position.id,
+        protocol: "navi",
+        protocolName: PROTOCOL_NAMES.navi,
+        product: `${assetSymbol} eMode supply`,
+        asset: assetSymbol,
+        side: "supply",
+        amount: formatAmount(decimalToNumber(supply.amount)),
+        valueUsd: numberOrNull(decimalToNumber(supply.valueUSD)),
+        apr: naviSupplyApr(supply.pool),
+        rewards: [],
+        positionId: position.id,
+        url: "https://app.naviprotocol.io/",
+        source: "NAVI beta SDK",
+        status: "live",
+        note: `NAVI ${position.market} eMode supply position.`,
+      });
+    }
+  }
+
+  return {
+    positions,
+    status: "live",
+    warnings: [],
+  };
+}
+
 function buildBluefinLendPortfolioRows(
   portfolio: BluefinLendPortfolio,
   marketMap: Map<number, BluefinLendMarketData>,
@@ -448,6 +597,13 @@ function bluefinBorrowApr(market: BluefinLendMarketData) {
   );
 }
 
+function naviSupplyApr(pool: { currentSupplyRate?: string; supplyIncentiveApyInfo?: { apy?: string | number } }) {
+  const baseRate = decimalToNumber(pool.currentSupplyRate);
+  const baseApr = baseRate > 1_000 ? baseRate / 1e27 * 100 : baseRate;
+  const incentiveApr = decimalToNumber(pool.supplyIncentiveApyInfo?.apy);
+  return numberOrNull(baseApr + incentiveApr);
+}
+
 function collectScallopRewards(account: ScallopObligationAccount) {
   return Object.values(account.borrowIncentives ?? {})
     .flatMap((incentive) => incentive?.rewards ?? [])
@@ -463,6 +619,17 @@ function decimalToNumber(value: DecimalLike | number | string | null | undefined
   if (value === null || value === undefined) return 0;
   const numeric = Number(typeof value === "object" ? value.toString() : value);
   return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function bigNumberToNumber(value: DecimalLike | number | string | null | undefined) {
+  return decimalToNumber(value);
+}
+
+function bigNumberToPlainString(value: DecimalLike | number | string) {
+  if (typeof value === "object" && "toFixed" in value && typeof value.toFixed === "function") {
+    return value.toFixed();
+  }
+  return typeof value === "object" ? value.toString() : String(value);
 }
 
 function numberOrNull(value: number) {
