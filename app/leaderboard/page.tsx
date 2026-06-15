@@ -98,7 +98,7 @@ export default async function LeaderboardPage() {
                 </table>
               </div>
             ) : (
-              <div className="p-4 text-sm text-[#a8a8c7]">
+              <div className="p-4 text-sm text-[#a8a8c7] text-center">
                 No leaderboard entries yet. Wallets are registered after a dashboard deposit, then scored by the hourly snapshot job.
               </div>
             )}

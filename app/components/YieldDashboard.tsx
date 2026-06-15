@@ -189,7 +189,7 @@ export default function YieldDashboard() {
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(102,103,238,0.16)_0%,rgba(11,13,20,0)_26%),linear-gradient(90deg,rgba(159,255,191,0.07),rgba(242,77,176,0.06),rgba(255,234,75,0.04))]" />
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-size-[48px_48px] opacity-30" />
 
-      <div className="relative mx-auto flex w-full max-w-9xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="relative mx-auto flex w-full max-w-8xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 border-b border-[#373A4D]/70 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-sm font-black text-[#9FFFBF]">
@@ -761,7 +761,7 @@ function ProtocolCard({
         </div>
       </div>
 
-      <div className="mt-4 rounded-md border border-[#373A4D] bg-[#0f111b] p-3 text-xs text-[#a8a8c7]">
+      <div className="mt-4 rounded-md border border-[#373A4D] bg-[#0f111b] p-3 text-[10px] text-[#a8a8c7]">
         {loading ? "--" : breakdownLabel(opportunity)}
       </div>
 
