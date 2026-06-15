@@ -14,6 +14,7 @@
     "@mysten/dapp-kit": "^1.0.6",
     "@mysten/sui": "2.17.0",
     "@naviprotocol/lending": "^1.4.6",
+    "@neondatabase/serverless": "^1.1.0",
     "@scallop-io/sui-scallop-sdk": "^3.0.2",
     "@suilend/sdk": "^3.0.4",
     "@suilend/sui-fe": "^3.0.7",
