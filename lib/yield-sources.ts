@@ -6,10 +6,13 @@ import {
   type YieldOpportunity,
   type YieldRateBreakdown,
 } from "./yield-types";
+import {
+  LENDING_ASSETS,
+  STABLECOIN_ASSET_SYMBOLS,
+} from "./lending/constants";
+import type { LendingAssetSymbol } from "./lending/types";
 
 const REFRESH_INTERVAL_MS = 30_000;
-const NATIVE_USDC_COIN_TYPE =
-  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
 const NAVI_POOLS_URL =
   "https://open-api.naviprotocol.io/api/navi/pools?env=prod&sdk=1.4.6&market=main";
 const BLUEFIN_LEND_CACHE_TTL_MS = 60_000;
@@ -95,10 +98,10 @@ type NaviPoolsResponse = {
 export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   const warnings: string[] = [];
   const [scallopResult, bluefinResult, naviResult, suilendResult] = await Promise.allSettled([
-    fetchScallopUsdcOpportunity(),
-    fetchBluefinLendUsdcOpportunity(),
-    fetchNaviUsdcOpportunity(),
-    fetchSuilendUsdcOpportunity(),
+    fetchScallopStablecoinOpportunities(),
+    fetchBluefinLendStablecoinOpportunities(),
+    fetchNaviStablecoinOpportunities(),
+    fetchSuilendStablecoinOpportunities(),
   ]);
 
   const opportunities: YieldOpportunity[] = [];
@@ -109,41 +112,41 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
 
   if (scallopResult.status === "fulfilled") {
     scallopSdk = scallopResult.value.status;
-    opportunities.push(scallopResult.value.opportunity);
+    opportunities.push(...scallopResult.value.opportunities);
     warnings.push(...scallopResult.value.warnings);
   } else {
     warnings.push(`Scallop SDK source failed: ${errorMessage(scallopResult.reason)}`);
-    opportunities.push(unavailableOpportunity("scallop", "Scallop USDC lending pool"));
+    opportunities.push(...unavailableStablecoinOpportunities("scallop"));
   }
 
   if (bluefinResult.status === "fulfilled") {
     bluefinLend = bluefinResult.value.status;
-    opportunities.push(bluefinResult.value.opportunity);
+    opportunities.push(...bluefinResult.value.opportunities);
     warnings.push(...bluefinResult.value.warnings);
   } else {
     warnings.push(`Bluefin Lend source failed: ${errorMessage(bluefinResult.reason)}`);
-    opportunities.push(unavailableOpportunity("bluefin", "Bluefin Lend USDC market"));
+    opportunities.push(...unavailableStablecoinOpportunities("bluefin"));
   }
 
   if (naviResult.status === "fulfilled") {
     naviOpenApi = naviResult.value.status;
-    opportunities.push(naviResult.value.opportunity);
+    opportunities.push(...naviResult.value.opportunities);
     warnings.push(...naviResult.value.warnings);
   } else {
     warnings.push(`NAVI open-api source failed: ${errorMessage(naviResult.reason)}`);
-    opportunities.push(unavailableOpportunity("navi", "NAVI USDC supply market"));
+    opportunities.push(...unavailableStablecoinOpportunities("navi"));
   }
 
   if (suilendResult.status === "fulfilled") {
     suilendSdk = suilendResult.value.status;
-    opportunities.push(suilendResult.value.opportunity);
+    opportunities.push(...suilendResult.value.opportunities);
     warnings.push(...suilendResult.value.warnings);
   } else {
     warnings.push(`Suilend SDK source failed: ${errorMessage(suilendResult.reason)}`);
-    opportunities.push(unavailableOpportunity("suilend", "Suilend USDC reserve"));
+    opportunities.push(...unavailableStablecoinOpportunities("suilend"));
   }
 
-  const deduped = dedupeByProtocol(opportunities)
+  const normalized = fillMissingStablecoinOpportunities(opportunities)
     .map((item) => ({
       ...item,
       apr: normalizePercent(item.apr),
@@ -157,14 +160,18 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
         value: normalizePercent(entry.value),
       })),
     }))
-    .sort((a, b) => (b.apy ?? -1) - (a.apy ?? -1));
+    .sort((a, b) => {
+      const protocolDiff = protocolSortIndex(a.protocol) - protocolSortIndex(b.protocol);
+      if (protocolDiff !== 0) return protocolDiff;
+      return assetSortIndex(a.asset) - assetSortIndex(b.asset);
+    });
 
   return {
     generatedAt: new Date().toISOString(),
     refreshIntervalMs: REFRESH_INTERVAL_MS,
     chain: "Sui",
     asset: "Stablecoins",
-    opportunities: deduped,
+    opportunities: normalized,
     sources: {
       scallopSdk,
       naviOpenApi,
@@ -175,8 +182,8 @@ export async function getYieldDashboardData(): Promise<YieldApiResponse> {
   };
 }
 
-async function fetchScallopUsdcOpportunity(): Promise<{
-  opportunity: YieldOpportunity;
+async function fetchScallopStablecoinOpportunities(): Promise<{
+  opportunities: YieldOpportunity[];
   status: DataQuality;
   warnings: string[];
 }> {
@@ -187,29 +194,34 @@ async function fetchScallopUsdcOpportunity(): Promise<{
   });
   await client.init();
 
-  const pool = (await client.query.getMarketPool("usdc", {
-    indexer: true,
-  })) as ScallopMarketPool | undefined;
+  const opportunities: YieldOpportunity[] = [];
+  const warnings: string[] = [];
 
-  if (!pool) {
-    return {
-      opportunity: unavailableOpportunity("scallop", "Scallop USDC lending pool"),
-      status: "unavailable",
-      warnings: ["Scallop SDK did not return the USDC market pool."],
-    };
-  }
+  for (const asset of STABLECOIN_ASSET_SYMBOLS) {
+    const coinNames = resolveScallopMarketCoinNames(asset, client.constants.poolAddresses);
+    let pool: ScallopMarketPool | undefined;
+    for (const coinName of coinNames) {
+      pool = (await client.query.getMarketPool(coinName, {
+        indexer: true,
+      })) as ScallopMarketPool | undefined;
+      if (pool) break;
+    }
 
-  const supplyApr = pool.supplyApr * 100;
-  const supplyApy = pool.supplyApy * 100;
-  const borrowApr = pool.borrowApr * 100;
+    if (!pool) {
+      warnings.push(`Scallop SDK did not return the ${asset} market pool. Tried keys: ${coinNames.join(", ") || asset.toLowerCase()}.`);
+      continue;
+    }
 
-  return {
-    opportunity: {
-      id: "scallop-usdc",
+    const supplyApr = pool.supplyApr * 100;
+    const supplyApy = pool.supplyApy * 100;
+    const borrowApr = pool.borrowApr * 100;
+
+    opportunities.push({
+      id: `scallop-${asset.toLowerCase()}`,
       protocol: "scallop",
       protocolName: PROTOCOL_NAMES.scallop,
-      product: "USDC lending pool",
-      asset: pool.symbol || "USDC",
+      product: `${asset} lending pool`,
+      asset,
       apr: supplyApr,
       apy: supplyApy,
       tvlUsd: numberOrNull(pool.supplyCoin * pool.coinPrice),
@@ -229,14 +241,18 @@ async function fetchScallopUsdcOpportunity(): Promise<{
         { label: "Supply APY", value: supplyApy, kind: "base" },
         { label: "Borrow APR", value: borrowApr, kind: "borrow" },
       ],
-    },
-    status: "live",
-    warnings: [],
+    });
+  }
+
+  return {
+    opportunities,
+    status: sourceStatus(opportunities),
+    warnings,
   };
 }
 
-async function fetchBluefinLendUsdcOpportunity(): Promise<{
-  opportunity: YieldOpportunity;
+async function fetchBluefinLendStablecoinOpportunities(): Promise<{
+  opportunities: YieldOpportunity[];
   status: DataQuality;
   warnings: string[];
 }> {
@@ -247,27 +263,29 @@ async function fetchBluefinLendUsdcOpportunity(): Promise<{
     cacheTTL: BLUEFIN_LEND_CACHE_TTL_MS,
   })) ?? []) as BluefinLendMarketData[];
 
-  const usdcMarket = markets.find(
-    (market) => normalizeCoinType(market.coinType) === NATIVE_USDC_COIN_TYPE,
-  );
+  const opportunities: YieldOpportunity[] = [];
+  const warnings: string[] = [];
 
-  if (!usdcMarket) {
-    return {
-      opportunity: unavailableOpportunity("bluefin", "Bluefin Lend USDC market"),
-      status: "unavailable",
-      warnings: ["Bluefin Lend market source did not return the native USDC market."],
-    };
+  for (const asset of STABLECOIN_ASSET_SYMBOLS) {
+    const market = markets.find(
+      (item) => normalizeCoinType(item.coinType) === normalizeCoinType(LENDING_ASSETS[asset].coinType),
+    );
+    if (!market) {
+      warnings.push(`Bluefin Lend market source did not return the ${asset} market.`);
+      continue;
+    }
+    opportunities.push(fromBluefinLendMarket(market, asset));
   }
 
   return {
-    opportunity: fromBluefinLendMarket(usdcMarket),
-    status: "live",
-    warnings: [],
+    opportunities,
+    status: sourceStatus(opportunities),
+    warnings,
   };
 }
 
-async function fetchNaviUsdcOpportunity(): Promise<{
-  opportunity: YieldOpportunity;
+async function fetchNaviStablecoinOpportunities(): Promise<{
+  opportunities: YieldOpportunity[];
   status: DataQuality;
   warnings: string[];
 }> {
@@ -282,40 +300,39 @@ async function fetchNaviUsdcOpportunity(): Promise<{
 
   const payload = (await response.json()) as NaviPoolsResponse;
   const pools = payload.data ?? [];
-  const pool = selectNaviUsdcPool(pools);
+  const opportunities: YieldOpportunity[] = [];
+  const warnings: string[] = [];
 
-  if (!pool) {
-    return {
-      opportunity: unavailableOpportunity("navi", "NAVI USDC supply market"),
-      status: "unavailable",
-      warnings: ["NAVI open-api did not return a USDC-related market."],
-    };
-  }
+  for (const asset of STABLECOIN_ASSET_SYMBOLS) {
+    const pool = selectNaviPool(pools, asset);
+    if (!pool) {
+      warnings.push(`NAVI open-api did not return a ${asset} market.`);
+      continue;
+    }
 
-  const apyInfo = pool.supplyIncentiveApyInfo ?? {};
-  const borrowInfo = pool.borrowIncentiveApyInfo ?? {};
-  const totalApy = parsePercent(apyInfo.apy);
-  const baseApy = parsePercent(apyInfo.vaultApr);
-  const rewardApy = Math.max(
-    0,
-    (parsePercent(apyInfo.boostedApr) ?? 0) +
-      (parsePercent(apyInfo.stakingYieldApy) ?? 0) +
-      (parsePercent(apyInfo.treasuryApy) ?? 0) +
-      (parsePercent(apyInfo.underlyingApy) ?? 0),
-  );
-  const borrowApr = parsePercent(borrowInfo.apy);
-  const tokenSymbol = pool.token?.symbol || "USDC";
-  const decimals = pool.token?.decimals ?? 6;
-  const price = Number(pool.oracle?.price ?? pool.token?.price ?? 1);
-  const supplyAmount = parseScaledNaviAmount(pool.totalSupplyAmount, decimals);
+    const apyInfo = pool.supplyIncentiveApyInfo ?? {};
+    const borrowInfo = pool.borrowIncentiveApyInfo ?? {};
+    const totalApy = parsePercent(apyInfo.apy);
+    const baseApy = parsePercent(apyInfo.vaultApr);
+    const rewardApy = Math.max(
+      0,
+      (parsePercent(apyInfo.boostedApr) ?? 0) +
+        (parsePercent(apyInfo.stakingYieldApy) ?? 0) +
+        (parsePercent(apyInfo.treasuryApy) ?? 0) +
+        (parsePercent(apyInfo.underlyingApy) ?? 0),
+    );
+    const borrowApr = parsePercent(borrowInfo.apy);
+    const tokenSymbol = pool.token?.symbol || asset;
+    const decimals = pool.token?.decimals ?? LENDING_ASSETS[asset].decimals;
+    const price = Number(pool.oracle?.price ?? pool.token?.price ?? 1);
+    const supplyAmount = parseScaledNaviAmount(pool.totalSupplyAmount, decimals);
 
-  return {
-    opportunity: {
-      id: `navi-${pool.uniqueId || pool.id}`,
+    opportunities.push({
+      id: `navi-${asset.toLowerCase()}-${pool.uniqueId || pool.id}`,
       protocol: "navi",
       protocolName: PROTOCOL_NAMES.navi,
-      product: `${tokenSymbol} supply market`,
-      asset: tokenSymbol,
+      product: `${asset} supply market`,
+      asset,
       apr: totalApy === null ? null : apyToApr(totalApy),
       apy: totalApy,
       tvlUsd: numberOrNull(supplyAmount * price),
@@ -330,18 +347,22 @@ async function fetchNaviUsdcOpportunity(): Promise<{
       url: "https://app.naviprotocol.io/",
       status: pool.status === "active" ? "live" : "partial",
       note:
-        tokenSymbol === "USDC"
+        tokenSymbol.toUpperCase() === asset
           ? "Pulled from the same NAVI open-api pool fields used by the NAVI SDK."
-          : `NAVI returned ${tokenSymbol} as the active USDC-related market for this source.`,
+          : `NAVI returned ${tokenSymbol} for the configured ${asset} market source.`,
       rateBreakdown: buildNaviBreakdown(apyInfo, borrowInfo),
-    },
-    status: pool.status === "active" ? "live" : "partial",
-    warnings: [],
+    });
+  }
+
+  return {
+    opportunities,
+    status: sourceStatus(opportunities),
+    warnings,
   };
 }
 
-async function fetchSuilendUsdcOpportunity(): Promise<{
-  opportunity: YieldOpportunity;
+async function fetchSuilendStablecoinOpportunities(): Promise<{
+  opportunities: YieldOpportunity[];
   status: DataQuality;
   warnings: string[];
 }> {
@@ -357,22 +378,27 @@ async function fetchSuilendUsdcOpportunity(): Promise<{
     baseUrl: "https://fullnode.mainnet.sui.io:443",
   });
   const suilend = await SuilendClient.initialize(LENDING_MARKET_ID, LENDING_MARKET_TYPE, grpcClient);
-  const reserve = suilend.lendingMarket.reserves.find(
-    (item) => normalizeCoinType(item.coinType.name) === NATIVE_USDC_COIN_TYPE,
+  const reserveEntries = STABLECOIN_ASSET_SYMBOLS.map((asset) => ({
+    asset,
+    reserve: suilend.lendingMarket.reserves.find(
+      (item) => normalizeCoinType(item.coinType.name) === normalizeCoinType(LENDING_ASSETS[asset].coinType),
+    ),
+  }));
+  const warnings = reserveEntries
+    .filter((entry) => !entry.reserve)
+    .map((entry) => `Suilend SDK did not return the ${entry.asset} reserve.`);
+  const reserves = reserveEntries.filter(
+    (entry): entry is { asset: LendingAssetSymbol; reserve: NonNullable<(typeof entry)["reserve"]> } =>
+      entry.reserve !== undefined,
   );
 
-  if (!reserve) {
-    return {
-      opportunity: unavailableOpportunity("suilend", "Suilend USDC reserve"),
-      status: "unavailable",
-      warnings: ["Suilend SDK did not return the native USDC reserve."],
-    };
-  }
-
-  const coinTypes = new Set<string>([normalizeCoinType(reserve.coinType.name)]);
-  for (const rewardManager of [reserve.depositsPoolRewardManager, reserve.borrowsPoolRewardManager]) {
-    for (const poolReward of rewardManager.poolRewards) {
-      if (poolReward) coinTypes.add(normalizeCoinType(poolReward.coinType.name));
+  const coinTypes = new Set<string>();
+  for (const { reserve } of reserves) {
+    coinTypes.add(normalizeCoinType(reserve.coinType.name));
+    for (const rewardManager of [reserve.depositsPoolRewardManager, reserve.borrowsPoolRewardManager]) {
+      for (const poolReward of rewardManager.poolRewards) {
+        if (poolReward) coinTypes.add(normalizeCoinType(poolReward.coinType.name));
+      }
     }
   }
 
@@ -385,31 +411,30 @@ async function fetchSuilendUsdcOpportunity(): Promise<{
   const coinMetadataMap = Object.fromEntries(
     metadataEntries.filter((entry): entry is [string, NonNullable<(typeof entry)[1]>] => entry[1] !== null),
   );
-  if (!coinMetadataMap[normalizeCoinType(reserve.coinType.name)]) {
-    return {
-      opportunity: unavailableOpportunity("suilend", "Suilend USDC reserve"),
-      status: "unavailable",
-      warnings: ["Suilend SDK returned the USDC reserve, but Sui coin metadata was unavailable."],
-    };
-  }
+  const opportunities: YieldOpportunity[] = [];
 
-  const parsedReserve = parseReserve(reserve, coinMetadataMap);
-  const depositApr = decimalToNumber(parsedReserve.depositAprPercent);
-  const borrowApr = decimalToNumber(parsedReserve.borrowAprPercent);
-  const utilization = decimalToNumber(parsedReserve.utilizationPercent);
-  const tvlUsd = decimalToNumber(parsedReserve.depositedAmountUsd);
+  for (const { asset, reserve } of reserves) {
+    if (!coinMetadataMap[normalizeCoinType(reserve.coinType.name)]) {
+      warnings.push(`Suilend SDK returned the ${asset} reserve, but Sui coin metadata was unavailable.`);
+      continue;
+    }
 
-  return {
-    opportunity: {
-      id: "suilend-usdc",
+    const parsedReserve = parseReserve(reserve, coinMetadataMap);
+    const depositApr = decimalToNumber(parsedReserve.depositAprPercent);
+    const borrowApr = decimalToNumber(parsedReserve.borrowAprPercent);
+    const utilization = decimalToNumber(parsedReserve.utilizationPercent);
+    const tvlUsd = decimalToNumber(parsedReserve.depositedAmountUsd);
+
+    opportunities.push({
+      id: `suilend-${asset.toLowerCase()}`,
       protocol: "suilend",
       protocolName: PROTOCOL_NAMES.suilend,
-      product: "Suilend USDC reserve",
-      asset: parsedReserve.token.symbol || "USDC",
+      product: `Suilend ${asset} reserve`,
+      asset,
       apr: depositApr,
       apy: aprToApy(depositApr),
       tvlUsd: numberOrNull(tvlUsd),
-      baseApy: depositApr,
+      baseApy: aprToApy(depositApr),
       rewardApy: 0,
       borrowApr,
       utilization,
@@ -419,19 +444,23 @@ async function fetchSuilendUsdcOpportunity(): Promise<{
       poolId: parsedReserve.id,
       url: "https://suilend.fi/",
       status: "live",
-      note: "Pulled from the Suilend SDK lending market reserve, including current USDC deposit and borrow APR fields.",
+      note: "Pulled from the Suilend SDK lending market reserve, including current deposit and borrow APR fields.",
       rateBreakdown: [
         { label: "Deposit APR", value: depositApr, kind: "base" },
         { label: "Deposit APY", value: aprToApy(depositApr), kind: "base" },
         { label: "Borrow APR", value: borrowApr, kind: "borrow" },
       ],
-    },
-    status: "live",
-    warnings: [],
+    });
+  }
+
+  return {
+    opportunities,
+    status: sourceStatus(opportunities),
+    warnings,
   };
 }
 
-function fromBluefinLendMarket(market: BluefinLendMarketData): YieldOpportunity {
+function fromBluefinLendMarket(market: BluefinLendMarketData, asset: LendingAssetSymbol): YieldOpportunity {
   const baseApr = decimalToNumber(market.supplyApr.interestApr);
   const stakingApr = decimalToNumber(market.supplyApr.stakingApr);
   const rewardEntries = market.supplyApr.rewards.map((reward) => ({
@@ -451,11 +480,11 @@ function fromBluefinLendMarket(market: BluefinLendMarketData): YieldOpportunity 
   const price = decimalToNumber(market.price);
 
   return {
-    id: "bluefin-lend-usdc",
+    id: `bluefin-lend-${asset.toLowerCase()}`,
     protocol: "bluefin",
     protocolName: PROTOCOL_NAMES.bluefin,
-    product: "Bluefin Lend USDC market",
-    asset: "USDC",
+    product: `Bluefin Lend ${asset} market`,
+    asset,
     apr: totalApr,
     apy: aprToApy(totalApr),
     tvlUsd: numberOrNull(totalSupply * price),
@@ -480,13 +509,13 @@ function fromBluefinLendMarket(market: BluefinLendMarketData): YieldOpportunity 
 }
 
 function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpportunity {
-  const isSuilend = protocol === "suilend";
+  const asset = stablecoinAssetFromProduct(product);
   return {
-    id: `${protocol}-unavailable`,
+    id: `${protocol}-${(asset ?? "stablecoins").toLowerCase()}-unavailable`,
     protocol,
     protocolName: PROTOCOL_NAMES[protocol],
     product,
-    asset: isSuilend ? "Stablecoins" : "USDC",
+    asset: asset ?? "Stablecoins",
     apr: null,
     apy: null,
     tvlUsd: null,
@@ -500,26 +529,84 @@ function unavailableOpportunity(protocol: ProtocolId, product: string): YieldOpp
     poolId: null,
     url: null,
     status: "unavailable",
-    note: isSuilend
-      ? "Suilend deposits are available through the SDK, but live stablecoin rate data is not configured yet."
-      : "No live USDC lending data was returned by the configured protocol source.",
+    note: "No live stablecoin lending data was returned by the configured protocol source.",
     rateBreakdown: [],
   };
 }
 
-function selectNaviUsdcPool(pools: NaviPool[]) {
+function unavailableStablecoinOpportunities(protocol: ProtocolId) {
+  return STABLECOIN_ASSET_SYMBOLS.map((asset) =>
+    unavailableOpportunity(protocol, `${PROTOCOL_NAMES[protocol]} ${asset} market`),
+  );
+}
+
+function resolveScallopMarketCoinNames(
+  asset: LendingAssetSymbol,
+  poolAddresses: Record<string, { coinType?: string; coinName?: string } | undefined>,
+) {
+  const names = new Set<string>();
+  const assetMeta = LENDING_ASSETS[asset];
+  const normalizedTarget = normalizeCoinType(assetMeta.coinType);
+
+  if (assetMeta.scallopCoinName) names.add(assetMeta.scallopCoinName);
+  for (const [coinName, pool] of Object.entries(poolAddresses)) {
+    if (!pool?.coinType) continue;
+    if (normalizeCoinType(pool.coinType) === normalizedTarget) {
+      names.add(pool.coinName ?? coinName);
+    }
+  }
+
+  names.add(asset.toLowerCase());
+  if (asset === "USDT") {
+    names.add("sbusdt");
+    names.add("wusdt");
+  }
+  if (asset === "USDSUI") {
+    names.add("usdsui");
+    names.add("susdsui");
+  }
+
+  return Array.from(names);
+}
+
+function selectNaviPool(pools: NaviPool[], asset: LendingAssetSymbol) {
   const active = pools.filter((pool) => pool.status === "active");
-  const nativeUsdc = active.find((pool) => normalizeCoinType(pool.suiCoinType) === NATIVE_USDC_COIN_TYPE);
-  if (nativeUsdc) return nativeUsdc;
+  const exactCoinType = active.find(
+    (pool) => normalizeCoinType(pool.suiCoinType) === normalizeCoinType(LENDING_ASSETS[asset].coinType),
+  );
+  if (exactCoinType) return exactCoinType;
 
   return active
-    .filter((pool) => /USDC/i.test(pool.token?.symbol ?? "") || /usdc/i.test(pool.suiCoinType))
+    .filter((pool) => new RegExp(asset, "i").test(pool.token?.symbol ?? "") || new RegExp(asset, "i").test(pool.suiCoinType))
     .sort((a, b) => {
-      const aNativeScore = normalizeCoinType(a.suiCoinType) === NATIVE_USDC_COIN_TYPE ? 1 : 0;
-      const bNativeScore = normalizeCoinType(b.suiCoinType) === NATIVE_USDC_COIN_TYPE ? 1 : 0;
+      const aNativeScore = normalizeCoinType(a.suiCoinType) === normalizeCoinType(LENDING_ASSETS[asset].coinType) ? 1 : 0;
+      const bNativeScore = normalizeCoinType(b.suiCoinType) === normalizeCoinType(LENDING_ASSETS[asset].coinType) ? 1 : 0;
       if (aNativeScore !== bNativeScore) return bNativeScore - aNativeScore;
       return Number(b.totalSupplyAmount ?? 0) - Number(a.totalSupplyAmount ?? 0);
     })[0];
+}
+
+function fillMissingStablecoinOpportunities(opportunities: YieldOpportunity[]) {
+  const byKey = new Map(opportunities.map((item) => [`${item.protocol}:${item.asset.toUpperCase()}`, item]));
+  for (const protocol of Object.keys(PROTOCOL_NAMES) as ProtocolId[]) {
+    for (const asset of STABLECOIN_ASSET_SYMBOLS) {
+      const key = `${protocol}:${asset}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, unavailableOpportunity(protocol, `${PROTOCOL_NAMES[protocol]} ${asset} market`));
+      }
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function sourceStatus(opportunities: YieldOpportunity[]) {
+  if (
+    opportunities.length === STABLECOIN_ASSET_SYMBOLS.length &&
+    opportunities.every((opportunity) => opportunity.status === "live")
+  ) {
+    return "live";
+  }
+  return opportunities.length > 0 ? "partial" : "unavailable";
 }
 
 function buildNaviBreakdown(supply: NaviApyInfo, borrow: NaviApyInfo): YieldRateBreakdown[] {
@@ -533,24 +620,6 @@ function buildNaviBreakdown(supply: NaviApyInfo, borrow: NaviApyInfo): YieldRate
   ];
 
   return entries.filter((entry) => entry.value !== null && entry.value !== 0);
-}
-
-function dedupeByProtocol(opportunities: YieldOpportunity[]) {
-  const byProtocol = new Map<ProtocolId, YieldOpportunity>();
-  for (const opportunity of opportunities) {
-    const current = byProtocol.get(opportunity.protocol);
-    if (!current || (opportunity.apy ?? -1) > (current.apy ?? -1)) {
-      byProtocol.set(opportunity.protocol, opportunity);
-    }
-  }
-
-  for (const protocol of Object.keys(PROTOCOL_NAMES) as ProtocolId[]) {
-    if (!byProtocol.has(protocol)) {
-      byProtocol.set(protocol, unavailableOpportunity(protocol, protocol === "suilend" ? "Suilend stablecoin deposit adapter" : "USDC market"));
-    }
-  }
-
-  return Array.from(byProtocol.values());
 }
 
 function calculateUtilization(totalSupplyAmount?: string, borrowedAmount?: string) {
@@ -611,6 +680,20 @@ function aprToApy(apr: number) {
 function normalizePercent(value: number | null) {
   if (value === null || !Number.isFinite(value)) return null;
   return Number(value.toFixed(4));
+}
+
+function protocolSortIndex(protocol: ProtocolId) {
+  return (Object.keys(PROTOCOL_NAMES) as ProtocolId[]).indexOf(protocol);
+}
+
+function assetSortIndex(asset: string) {
+  const index = STABLECOIN_ASSET_SYMBOLS.indexOf(asset.toUpperCase() as LendingAssetSymbol);
+  return index === -1 ? STABLECOIN_ASSET_SYMBOLS.length : index;
+}
+
+function stablecoinAssetFromProduct(product: string) {
+  const normalized = product.toUpperCase();
+  return STABLECOIN_ASSET_SYMBOLS.find((asset) => normalized.includes(asset)) ?? null;
 }
 
 function errorMessage(error: unknown) {

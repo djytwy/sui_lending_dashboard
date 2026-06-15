@@ -1,7 +1,15 @@
 "use client";
 
-import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import {
+  ConnectModal,
+  useCurrentAccount,
+  useCurrentWallet,
+  useDisconnectWallet,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { useMutationState } from "@tanstack/react-query";
 import Link from "next/link";
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LENDING_ASSETS,
@@ -57,6 +65,19 @@ const PROTOCOL_NAMES: Record<ProtocolId, string> = {
   scallop: "Scallop",
   bluefin: "Bluefin Lend",
   suilend: "Suilend",
+};
+
+const PROTOCOL_ICONS: Record<ProtocolId, string> = {
+  bluefin: "/protocolIcons/bluefin.avif",
+  navi: "/protocolIcons/navi.png",
+  scallop: "/protocolIcons/scallop.png",
+  suilend: "/protocolIcons/suilend.svg",
+};
+
+const COIN_LOGOS: Record<LendingAssetSymbol, string> = {
+  USDC: "/coinLogos/usdc.svg",
+  USDSUI: "/coinLogos/usdSui.svg",
+  USDT: "/coinLogos/usdt.svg",
 };
 
 const PROTOCOL_TOTAL = Object.keys(PROTOCOL_META).length;
@@ -179,10 +200,21 @@ export default function YieldDashboard() {
   }, [account?.address, refreshPositions]);
 
   const best = useMemo(() => {
-    return data?.opportunities.find((item) => item.apy !== null) ?? null;
+    return data?.opportunities.reduce<YieldOpportunity | null>((current, item) => {
+      if (item.apy === null) return current;
+      if (!current || item.apy > (current.apy ?? -1)) return item;
+      return current;
+    }, null) ?? null;
   }, [data]);
 
-  const liveCount = data?.opportunities.filter((item) => item.status === "live").length ?? 0;
+  const protocolHighlights = useMemo(() => {
+    return data ? bestOpportunityByProtocol(data.opportunities) : null;
+  }, [data]);
+
+  const liveCount = useMemo(() => {
+    if (!data) return 0;
+    return new Set(data.opportunities.filter((item) => item.status === "live").map((item) => item.protocol)).size;
+  }, [data]);
 
   return (
     <main className="min-h-screen bg-[#0b0d14] text-[#fdfdff]">
@@ -217,16 +249,16 @@ export default function YieldDashboard() {
               >
                 Leaderboard
               </Link>
-              <ConnectButton />
+              <WalletConnectPill />
             </div>
           </div>
         </header>
 
-        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)]">
+        <section>
+          <div className="min-h-[200px] w-full rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)]">
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-sm text-[#8585B8]">Current best USDC benchmark yield</p>
+                <p className="text-sm text-[#8585B8]">Current best stablecoin benchmark yield</p>
                 <div className="mt-3 flex items-end gap-3">
                   <span className="text-5xl font-semibold text-white sm:text-6xl">
                     {best?.apy === null || !best ? "--" : formatPercent(best.apy)}
@@ -260,7 +292,7 @@ export default function YieldDashboard() {
             </div>
           </div>
 
-          <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5">
+          {/* <div className="min-h-[312px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-[#8585B8]">Data source status</p>
@@ -305,7 +337,7 @@ export default function YieldDashboard() {
                 <p className="mt-3 text-sm text-[#FFEA4B]">{data.warnings[0]}</p>
               ) : null}
             </div>
-          </div>
+          </div> */}
         </section>
 
         <PositionsPanel
@@ -319,10 +351,11 @@ export default function YieldDashboard() {
         />
 
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {(data?.opportunities ?? skeletonProtocols()).map((opportunity) => (
+          {(protocolHighlights ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard
               key={opportunity.id}
               opportunity={opportunity}
+              protocolOpportunities={data?.opportunities.filter((item) => item.protocol === opportunity.protocol) ?? []}
               loading={isLoading && !data}
               onDepositComplete={() => {
                 if (account?.address) void refreshPositions(account.address, true);
@@ -358,10 +391,7 @@ export default function YieldDashboard() {
                   <tr key={`${item.id}-row`} className="border-b border-[#232534] last:border-b-0">
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
-                        <span
-                          className="size-3 rounded-sm"
-                          style={{ backgroundColor: PROTOCOL_META[item.protocol].accent }}
-                        />
+                        <ProtocolAssetIcons asset={item.asset} protocol={item.protocol} protocolName={item.protocolName} />
                         <span className="font-semibold text-white">{item.protocolName}</span>
                       </div>
                     </td>
@@ -401,6 +431,44 @@ function PositionsPanel({
   onRefresh: () => void;
 }) {
   const positions = data?.positions ?? [];
+  const signAndExecute = useSignAndExecuteTransaction();
+  const [claimAllStatus, setClaimAllStatus] = useState<string | null>(null);
+  const [isClaimingAll, setIsClaimingAll] = useState(false);
+
+  const claimAllRewards = async () => {
+    if (!address) {
+      setClaimAllStatus("Connect your Sui wallet first.");
+      return;
+    }
+
+    try {
+      setIsClaimingAll(true);
+      setClaimAllStatus("Finding claimable rewards...");
+      const { buildClaimAllRewardTransactions } = await import("@/lib/lending/claim-all");
+      const steps = await buildClaimAllRewardTransactions({
+        address,
+        positions,
+      });
+
+      for (const [index, step] of steps.entries()) {
+        setClaimAllStatus(`Waiting for wallet signature ${index + 1}/${steps.length}: ${step.summary}`);
+        const result = await signAndExecute.mutateAsync({ transaction: step.tx });
+        const digest = "digest" in result ? result.digest : undefined;
+        setClaimAllStatus(
+          digest
+            ? `Submitted ${index + 1}/${steps.length}: ${step.protocolName} ${digest}`
+            : `Submitted ${index + 1}/${steps.length}: ${step.protocolName}`,
+        );
+      }
+
+      setClaimAllStatus(`Claimed rewards from ${steps.length} transaction${steps.length === 1 ? "" : "s"}.`);
+      onRefresh();
+    } catch (reason) {
+      setClaimAllStatus(reason instanceof Error ? reason.message : "Claim all rewards failed");
+    } finally {
+      setIsClaimingAll(false);
+    }
+  };
 
   return (
     <section className="rounded-lg border border-[#373A4D] bg-[#151722]/95">
@@ -421,6 +489,14 @@ function PositionsPanel({
             ))
           ) : null}
           <button
+            className="h-10 rounded-lg border border-[#FFEA4B]/40 bg-[#FFEA4B]/10 px-4 text-sm font-semibold text-[#FFEA4B] transition hover:bg-[#FFEA4B]/15 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!address || loading || isClaimingAll}
+            onClick={claimAllRewards}
+            type="button"
+          >
+            {isClaimingAll ? "Claiming" : "Claim all rewards"}
+          </button>
+          <button
             className="h-10 rounded-lg border border-[#373A4D] bg-[#232534] px-4 text-sm font-semibold text-white transition hover:border-[#9FFFBF] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={!address || loading}
             onClick={onRefresh}
@@ -430,6 +506,10 @@ function PositionsPanel({
           </button>
         </div>
       </div>
+
+      {claimAllStatus ? (
+        <div className="border-b border-[#373A4D] px-4 py-3 text-sm text-[#dfdfed]">{claimAllStatus}</div>
+      ) : null}
 
       {!address ? (
         <div className="p-4 text-sm text-[#a8a8c7]">Connect a wallet to view stablecoin positions on Scallop, Bluefin Lend, NAVI, and Suilend.</div>
@@ -638,10 +718,12 @@ function PositionCard({
 
 function ProtocolCard({
   opportunity,
+  protocolOpportunities,
   loading,
   onDepositComplete,
 }: {
   opportunity: YieldOpportunity;
+  protocolOpportunities: YieldOpportunity[];
   loading: boolean;
   onDepositComplete?: () => void;
 }) {
@@ -649,11 +731,15 @@ function ProtocolCard({
   const account = useCurrentAccount();
   const signAndExecute = useSignAndExecuteTransaction();
   const protocol: LendingProtocolId = opportunity.protocol;
-  const [selectedAsset, setSelectedAsset] = useState<LendingAssetSymbol>("USDC");
+  const [selectedAsset, setSelectedAsset] = useState<LendingAssetSymbol>(
+    toLendingAssetSymbol(opportunity.asset) ?? "USDC",
+  );
   const [amount, setAmount] = useState("");
   const [depositStatus, setDepositStatus] = useState<string | null>(null);
   const [isBuildingDeposit, setIsBuildingDeposit] = useState(false);
-  const barWidth = Math.min(Math.max(opportunity.apy ?? 0, 0), 60);
+  const displayOpportunity =
+    protocolOpportunities.find((item) => item.asset.toUpperCase() === selectedAsset) ?? opportunity;
+  const barWidth = Math.min(Math.max(displayOpportunity.apy ?? 0, 0), 60);
   const selectedAssetMeta = LENDING_ASSETS[selectedAsset];
   const assetSupported = isLendingAssetSupported(protocol, selectedAsset);
   const isBusy = isBuildingDeposit || signAndExecute.isPending;
@@ -721,23 +807,27 @@ function ProtocolCard({
     <article className={"min-h-[356px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 " + meta.glow}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div
-            className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-xs font-black text-[#0b0d14]"
-            style={{ backgroundColor: meta.accent }}
-          >
-            {opportunity.protocolName.slice(0, 2).toUpperCase()}
+          <div className="grid size-10 place-items-center overflow-hidden rounded-lg border border-[#373A4D] bg-[#1c1e2c] p-1.5">
+            <Image
+              alt={`${opportunity.protocolName} icon`}
+              className="size-full object-contain"
+              height={40}
+              src={PROTOCOL_ICONS[opportunity.protocol]}
+              unoptimized={PROTOCOL_ICONS[opportunity.protocol].endsWith(".svg")}
+              width={40}
+            />
           </div>
           <div>
             <h3 className="font-semibold text-white">{opportunity.protocolName}</h3>
             <p className="text-xs text-[#8585B8]">{meta.label}</p>
           </div>
         </div>
-        <QualityBadge status={loading ? "partial" : opportunity.status} />
+        <QualityBadge status={loading ? "partial" : displayOpportunity.status} />
       </div>
 
       <div className="mt-5">
         <p className="text-xs text-[#8585B8]">APY</p>
-        <p className="mt-1 text-4xl font-semibold text-white">{loading ? "--" : formatPercent(opportunity.apy)}</p>
+        <p className="mt-1 text-4xl font-semibold text-white">{loading ? "--" : formatPercent(displayOpportunity.apy)}</p>
       </div>
 
       <div className="mt-4 h-2 rounded-md bg-[#232534]">
@@ -753,19 +843,19 @@ function ProtocolCard({
       <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
         <div>
           <p className="text-xs text-[#8585B8]">APR</p>
-          <p className="font-semibold text-[#FFEA4B]">{loading ? "--" : formatPercent(opportunity.apr)}</p>
+          <p className="font-semibold text-[#FFEA4B]">{loading ? "--" : formatPercent(displayOpportunity.apr)}</p>
         </div>
         <div>
           <p className="text-xs text-[#8585B8]">TVL</p>
-          <p className="font-semibold text-white">{loading ? "--" : formatCurrency(opportunity.tvlUsd)}</p>
+          <p className="font-semibold text-white">{loading ? "--" : formatCurrency(displayOpportunity.tvlUsd)}</p>
         </div>
       </div>
 
       <div className="mt-4 rounded-md border border-[#373A4D] bg-[#0f111b] p-3 text-[10px] text-[#a8a8c7]">
-        {loading ? "--" : breakdownLabel(opportunity)}
+        {loading ? "--" : breakdownLabel(displayOpportunity)}
       </div>
 
-      <p className="mt-4 min-h-10 text-sm text-[#a8a8c7]">{opportunity.product}</p>
+      <p className="mt-4 min-h-10 text-sm text-[#a8a8c7]">{displayOpportunity.product}</p>
 
       <div className="mt-4 border-t border-[#373A4D] pt-3">
         <div className="flex items-center justify-between gap-3">
@@ -863,6 +953,113 @@ function StatusPill({
   );
 }
 
+function WalletConnectPill() {
+  const account = useCurrentAccount();
+  const { isConnecting, isConnected } = useCurrentWallet();
+  const disconnectWallet = useDisconnectWallet();
+  const [open, setOpen] = useState(false);
+  const [hadDisconnectError, setHadDisconnectError] = useState(false);
+  const connectMutationErrors = useMutationState({
+    filters: {
+      mutationKey: [{ baseEntity: "connect-wallet", baseScope: "wallet" }],
+    },
+    select: (mutation) => mutation.state.status === "error",
+  });
+
+  const showConnectionError = !isConnected && (hadDisconnectError || connectMutationErrors.some(Boolean));
+  const tone = isConnected ? "green" : showConnectionError ? "red" : "violet";
+  const toneClass = {
+    green: "border-[#9FFFBF]/30 bg-[#9FFFBF]/10 text-[#9FFFBF] shadow-[0_0_22px_rgba(159,255,191,0.10)] hover:border-[#9FFFBF]/55",
+    red: "border-[#FF4D29]/35 bg-[#FF4D29]/10 text-[#FF4D29] shadow-[0_0_22px_rgba(255,77,41,0.10)] hover:border-[#FF4D29]/60",
+    violet: "border-[#7F7FFF]/35 bg-[#7F7FFF]/10 text-[#dfdfed] shadow-[0_0_22px_rgba(127,127,255,0.12)] hover:border-[#7F7FFF]/60",
+  }[tone];
+
+  const value = isConnected && account?.address
+    ? formatAddress(account.address)
+    : isConnecting
+      ? "Connecting"
+      : showConnectionError
+        ? "Error"
+        : "Connect";
+
+  const button = (
+    <button
+      className={`flex h-10 items-center cursor-pointer gap-2 rounded-lg border px-3 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${toneClass}`}
+      disabled={disconnectWallet.isPending}
+      onClick={
+        isConnected
+          ? () => {
+            disconnectWallet.mutate(undefined, {
+              onError: () => setHadDisconnectError(true),
+              onSuccess: () => setHadDisconnectError(false),
+            });
+          }
+          : undefined
+      }
+      type="button"
+    >
+      <span className="text-[#8585B8]">Wallet</span>
+      <span className="font-semibold">{value}</span>
+    </button>
+  );
+
+  if (isConnected) {
+    return button;
+  }
+
+  return (
+    <ConnectModal
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          setHadDisconnectError(false);
+        }
+      }}
+      trigger={button}
+    />
+  );
+}
+
+function ProtocolAssetIcons({
+  asset,
+  protocol,
+  protocolName,
+}: {
+  asset: string;
+  protocol: ProtocolId;
+  protocolName: string;
+}) {
+  const coinLogo = coinLogoForAsset(asset);
+
+  return (
+    <div className="relative h-8 w-14 shrink-0">
+      <span className="absolute left-0 top-0 grid size-8 place-items-center overflow-hidden rounded-md border border-[#373A4D] bg-[#1c1e2c] p-1">
+        <Image
+          alt={`${protocolName} icon`}
+          className="size-full object-contain"
+          height={32}
+          src={PROTOCOL_ICONS[protocol]}
+          unoptimized={PROTOCOL_ICONS[protocol].endsWith(".svg")}
+          width={32}
+        />
+      </span>
+      {coinLogo ? (
+        <span className="absolute left-6 top-0 grid size-8 place-items-center overflow-hidden rounded-full border border-[#373A4D] bg-[#0f111b] p-1 shadow-[0_0_14px_rgba(0,0,0,0.28)]">
+          <Image
+            alt={`${asset} icon`}
+            className="size-full object-contain"
+            height={32}
+            src={coinLogo}
+            unoptimized
+            width={32}
+          />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function MetricBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-[#373A4D] bg-[#1c1e2c] p-3">
@@ -932,6 +1129,21 @@ function skeletonProtocols(): YieldOpportunity[] {
   }));
 }
 
+function bestOpportunityByProtocol(opportunities: YieldOpportunity[]) {
+  const byProtocol = new Map<ProtocolId, YieldOpportunity>();
+
+  for (const opportunity of opportunities) {
+    const current = byProtocol.get(opportunity.protocol);
+    if (!current || (opportunity.apy ?? -1) > (current.apy ?? -1)) {
+      byProtocol.set(opportunity.protocol, opportunity);
+    }
+  }
+
+  return (Object.keys(PROTOCOL_META) as ProtocolId[]).map((protocol) => {
+    return byProtocol.get(protocol) ?? skeletonProtocols().find((item) => item.protocol === protocol)!;
+  });
+}
+
 function skeletonPositions(): UserLendingPosition[] {
   return (Object.keys(PROTOCOL_META) as ProtocolId[]).map((protocol) => ({
     id: `${protocol}-position-loading`,
@@ -968,6 +1180,20 @@ function formatDate(value: string | null | undefined) {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function formatAddress(address: string) {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function coinLogoForAsset(asset: string) {
+  const symbol = asset.toUpperCase() as LendingAssetSymbol;
+  return COIN_LOGOS[symbol] ?? null;
+}
+
+function toLendingAssetSymbol(asset: string) {
+  const symbol = asset.toUpperCase() as LendingAssetSymbol;
+  return LENDING_ASSETS[symbol] ? symbol : null;
 }
 
 function sideLabel(side: UserLendingPosition["side"]) {

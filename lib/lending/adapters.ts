@@ -41,11 +41,26 @@ function requireField(value: string, label: string) {
   }
   return trimmed;
 }
-function requireScallopCoinName(asset: ReturnType<typeof getAsset>) {
-  if (!asset.scallopCoinName) {
-    throw new Error(`Scallop support for ${asset.symbol} is not configured in the installed SDK. Select USDC or use another protocol for this asset.`);
+function resolveScallopPoolCoinName(assetCoinType: string, poolAddresses: Record<string, { coinType?: string; coinName?: string } | undefined>) {
+  const normalizedTarget = normalizeCoinType(assetCoinType);
+  for (const [coinName, pool] of Object.entries(poolAddresses)) {
+    if (!pool?.coinType) continue;
+    if (normalizeCoinType(pool.coinType) === normalizedTarget) {
+      return pool.coinName ?? coinName;
+    }
   }
-  return asset.scallopCoinName;
+  return null;
+}
+
+function normalizeCoinType(coinType: string) {
+  if (coinType.startsWith("0x")) return coinType;
+  return coinType
+    .split("<")
+    .map((segment) => {
+      if (!segment || segment.startsWith("0x")) return segment;
+      return `0x${segment}`;
+    })
+    .join("<");
 }
 
 async function buildScallopTransaction({
@@ -53,7 +68,6 @@ async function buildScallopTransaction({
 }: AdapterContext): Promise<BuildLendingTransactionResult> {
   const { ScallopClient } = await import("@scallop-io/sui-scallop-sdk");
   const asset = getAsset(input.asset);
-  const scallopCoinName = requireScallopCoinName(asset);
   const amount = Number(requireAmount(input));
 
   if (!Number.isSafeInteger(amount)) {
@@ -65,6 +79,10 @@ async function buildScallopTransaction({
     networkType: "mainnet",
   });
   await client.init();
+  const scallopCoinName = resolveScallopPoolCoinName(asset.coinType, client.constants.poolAddresses);
+  if (!scallopCoinName) {
+    throw new Error(`Scallop does not support ${asset.symbol} in the current SDK pool list`);
+  }
 
   let tx: Transaction;
   if (input.action === "deposit") {

@@ -63,7 +63,7 @@ export const PROTOCOL_CAPABILITIES: ProtocolCapability[] = [
       repay: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
       claimRewards: ["Scallop Obligation ID", "Scallop Obligation Key ID"],
     },
-    warning: "This SDK build exposes Scallop stablecoin support for USDC only.",
+    warning: "Scallop assets are resolved dynamically from the SDK pool list; unsupported coin types fail during transaction building.",
   },
   {
     id: "navi",
@@ -95,8 +95,8 @@ export function getProtocolCapability(id: string) {
 }
 
 export function isLendingAssetSupported(protocol: LendingProtocolId, symbol: LendingAssetSymbol) {
-  const asset = getAsset(symbol);
-  if (protocol === "scallop") return Boolean(asset.scallopCoinName);
+  void protocol;
+  void symbol;
   return true;
 }
 

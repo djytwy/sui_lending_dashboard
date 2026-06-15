@@ -54,6 +54,7 @@ type BluefinLendPortfolio = {
 type ScallopLending = {
   coinName: string;
   symbol: string;
+  coinType?: string;
   supplyApr: number;
   suppliedCoin: number;
   suppliedValue: number;
@@ -219,11 +220,12 @@ async function fetchScallopPositions(address: string): Promise<{
 
   const positions: UserLendingPosition[] = [];
   const warnings: string[] = [];
+  const poolAddresses = client.constants.poolAddresses;
 
   if (lendingsResult.status === "fulfilled") {
     for (const lending of Object.values(lendingsResult.value)) {
       if (!lending || lending.suppliedCoin <= 0) continue;
-      const assetSymbol = stablecoinSymbolFromScallop(lending.symbol, lending.coinName);
+      const assetSymbol = stablecoinSymbolFromScallop(lending.symbol, lending.coinName, lending.coinType, poolAddresses);
       if (!assetSymbol) continue;
       const decimals = lending.coinDecimal ?? stablecoinDecimals(assetSymbol);
       positions.push({
@@ -271,7 +273,7 @@ async function fetchScallopPositions(address: string): Promise<{
       if (!account) continue;
       for (const collateral of Object.values(account.collaterals ?? {})) {
         if (!collateral || collateral.depositedCoin <= 0) continue;
-        const assetSymbol = stablecoinSymbolFromScallop(collateral.symbol, collateral.coinName);
+        const assetSymbol = stablecoinSymbolFromScallop(collateral.symbol, collateral.coinName, undefined, poolAddresses);
         if (!assetSymbol) continue;
         const decimals = stablecoinDecimals(assetSymbol);
         positions.push({
@@ -306,7 +308,7 @@ async function fetchScallopPositions(address: string): Promise<{
 
       for (const debt of Object.values(account.debts ?? {})) {
         if (!debt || debt.borrowedCoin <= 0) continue;
-        const assetSymbol = stablecoinSymbolFromScallop(debt.symbol, debt.coinName);
+        const assetSymbol = stablecoinSymbolFromScallop(debt.symbol, debt.coinName, undefined, poolAddresses);
         if (!assetSymbol) continue;
         const decimals = stablecoinDecimals(assetSymbol);
         const rewardApr = (debt.rewards ?? []).reduce(
@@ -669,11 +671,38 @@ function isStablecoinPosition(position: UserLendingPosition) {
   return isStablecoinSymbol(position.asset);
 }
 
-function stablecoinSymbolFromScallop(symbol: string | undefined, coinName: string | undefined) {
+function stablecoinSymbolFromScallop(
+  symbol: string | undefined,
+  coinName: string | undefined,
+  coinType: string | undefined,
+  poolAddresses: Record<string, { coinType?: string; coinName?: string } | undefined>,
+): LendingAssetSymbol | null {
+  const byCoinType =
+    coinType !== undefined
+      ? STABLECOIN_COIN_TYPES.get(normalizeCoinType(coinType)) ?? resolveScallopPoolSymbolByCoinType(coinType, poolAddresses)
+      : undefined;
+  if (byCoinType) return byCoinType;
+
   const mapped = coinName ? SCALLOP_STABLECOIN_NAMES.get(coinName.trim().toLowerCase()) : undefined;
   if (mapped) return mapped;
   const normalizedSymbol = symbol?.trim().toUpperCase();
   return isStablecoinSymbol(normalizedSymbol) ? normalizedSymbol : null;
+}
+
+function resolveScallopPoolSymbolByCoinType(
+  coinType: string,
+  poolAddresses: Record<string, { coinType?: string; coinName?: string } | undefined>,
+): LendingAssetSymbol | null {
+  const normalizedTarget = normalizeCoinType(coinType);
+  for (const [coinName, pool] of Object.entries(poolAddresses)) {
+    if (!pool?.coinType) continue;
+    if (normalizeCoinType(pool.coinType) !== normalizedTarget) continue;
+    const normalizedCoinName = coinName.trim().toLowerCase();
+    if (normalizedCoinName === "usdc" || normalizedCoinName === "usdt" || normalizedCoinName === "usdsui") {
+      return normalizedCoinName.toUpperCase() as LendingAssetSymbol;
+    }
+  }
+  return null;
 }
 
 function stablecoinSymbolFromCoinType(coinType: string) {
