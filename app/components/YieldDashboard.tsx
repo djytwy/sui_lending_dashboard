@@ -30,6 +30,12 @@ import type {
 const CLIENT_REFRESH_INTERVAL_MS = 30_000;
 const DONATION_ADDRESS = process.env.NEXT_PUBLIC_DONATION_ADDRESS?.trim() ?? "";
 
+type QuickSupplyTarget = {
+  asset: LendingAssetSymbol;
+  nonce: number;
+  protocol: ProtocolId;
+};
+
 const PROTOCOL_META: Record<
   ProtocolId,
   {
@@ -114,6 +120,7 @@ export default function YieldDashboard() {
   const [positionsData, setPositionsData] = useState<PositionsApiResponse | null>(null);
   const [isLoadingPositions, setIsLoadingPositions] = useState(false);
   const [positionsError, setPositionsError] = useState<string | null>(null);
+  const [quickSupplyTarget, setQuickSupplyTarget] = useState<QuickSupplyTarget | null>(null);
 
   const refresh = useCallback(async (silent = false) => {
     if (!silent) {
@@ -216,6 +223,24 @@ export default function YieldDashboard() {
     return new Set(data.opportunities.filter((item) => item.status === "live").map((item) => item.protocol)).size;
   }, [data]);
 
+  const handleQuickSupply = useCallback(() => {
+    const asset = best ? toLendingAssetSymbol(best.asset) : null;
+    if (!best || !asset) return;
+
+    setQuickSupplyTarget({
+      asset,
+      nonce: Date.now(),
+      protocol: best.protocol,
+    });
+
+    window.requestAnimationFrame(() => {
+      document.getElementById(`protocol-card-${best.protocol}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+  }, [best]);
+
   return (
     <main className="min-h-screen bg-[#0b0d14] text-[#fdfdff]">
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(102,103,238,0.16)_0%,rgba(11,13,20,0)_26%),linear-gradient(90deg,rgba(159,255,191,0.07),rgba(242,77,176,0.06),rgba(255,234,75,0.04))]" />
@@ -264,7 +289,17 @@ export default function YieldDashboard() {
           <div className="min-h-[200px] w-full rounded-lg border border-[#373A4D] bg-[#151722]/95 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)]">
             <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-sm text-[#8585B8]">Current best stablecoin benchmark yield</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="text-sm text-[#8585B8]">Current best stablecoin benchmark yield</p>
+                  <button
+                    className="h-8 rounded-lg border border-[#9FFFBF]/40 bg-[#9FFFBF]/10 px-3 text-xs font-semibold text-[#9FFFBF] transition hover:bg-[#9FFFBF]/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!best || best.apy === null || !toLendingAssetSymbol(best.asset)}
+                    onClick={handleQuickSupply}
+                    type="button"
+                  >
+                    Quick supply
+                  </button>
+                </div>
                 <div className="mt-3 flex items-end gap-3">
                   <span className="text-5xl font-semibold text-white sm:text-6xl">
                     {best?.apy === null || !best ? "--" : formatPercent(best.apy)}
@@ -359,9 +394,10 @@ export default function YieldDashboard() {
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {(protocolHighlights ?? skeletonProtocols()).map((opportunity) => (
             <ProtocolCard
-              key={opportunity.id}
+              key={`${opportunity.id}-${quickSupplyTarget?.protocol === opportunity.protocol ? quickSupplyTarget.nonce : "default"}`}
               opportunity={opportunity}
               protocolOpportunities={data?.opportunities.filter((item) => item.protocol === opportunity.protocol) ?? []}
+              quickSupplyTarget={quickSupplyTarget?.protocol === opportunity.protocol ? quickSupplyTarget : null}
               loading={isLoading && !data}
               onDepositComplete={() => {
                 if (account?.address) void refreshPositions(account.address, true);
@@ -725,11 +761,13 @@ function PositionCard({
 function ProtocolCard({
   opportunity,
   protocolOpportunities,
+  quickSupplyTarget,
   loading,
   onDepositComplete,
 }: {
   opportunity: YieldOpportunity;
   protocolOpportunities: YieldOpportunity[];
+  quickSupplyTarget: QuickSupplyTarget | null;
   loading: boolean;
   onDepositComplete?: () => void;
 }) {
@@ -738,7 +776,7 @@ function ProtocolCard({
   const signAndExecute = useSignAndExecuteTransaction();
   const protocol: LendingProtocolId = opportunity.protocol;
   const [selectedAsset, setSelectedAsset] = useState<LendingAssetSymbol>(
-    toLendingAssetSymbol(opportunity.asset) ?? "USDC",
+    quickSupplyTarget?.asset ?? toLendingAssetSymbol(opportunity.asset) ?? "USDC",
   );
   const [amount, setAmount] = useState("");
   const [depositStatus, setDepositStatus] = useState<string | null>(null);
@@ -750,7 +788,6 @@ function ProtocolCard({
   const assetSupported = isLendingAssetSupported(protocol, selectedAsset);
   const isBusy = isBuildingDeposit || signAndExecute.isPending;
   const canDeposit = Boolean(account?.address) && !loading && assetSupported && amount.trim().length > 0 && !isBusy;
-
 
   const executeDeposit = async () => {
     if (!account?.address) {
@@ -810,7 +847,10 @@ function ProtocolCard({
   };
 
   return (
-    <article className={"min-h-[356px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 " + meta.glow}>
+    <article
+      className={"scroll-mt-6 min-h-[356px] rounded-lg border border-[#373A4D] bg-[#151722]/95 p-4 " + meta.glow}
+      id={`protocol-card-${opportunity.protocol}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="grid size-10 place-items-center overflow-hidden rounded-lg border border-[#373A4D] bg-[#1c1e2c] p-1.5">
