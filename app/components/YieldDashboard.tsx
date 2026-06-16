@@ -224,18 +224,24 @@ export default function YieldDashboard() {
       <div className="relative mx-auto flex w-full max-w-8xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 border-b border-[#373A4D]/70 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-sm font-black text-[#9FFFBF]">
-              SY
+            <div className="grid size-15 place-items-center overflow-hidden p-1.5">
+              <Image
+                alt="Sui Lending Dashboard icon"
+                className="size-full object-contain"
+                height={40}
+                src="/icon.png"
+                width={40}
+              />
             </div>
             <div>
               <p className="text-xs font-medium uppercase text-[#8585B8]">Sui mainnet yield router</p>
-              <h1 className="text-2xl font-semibold text-white sm:text-3xl">Stablecoin Live Yield Dashboard</h1>
+              <h1 className="text-2xl font-semibold text-white sm:text-3xl">Sui Lending Dashboard</h1>
             </div>
           </div>
 
           <div className="flex flex-col items-start gap-2 lg:items-end">
             <p className="max-w-full break-all text-xs text-[#8585B8]">
-              Sui donation address:{" "}
+              ❤️ If you like this project, donations are welcome to help keep it running. Donation address:{" "}
               <span className="font-mono text-[#dfdfed]">
                 {DONATION_ADDRESS || "Set NEXT_PUBLIC_DONATION_ADDRESS"}
               </span>
