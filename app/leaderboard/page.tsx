@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getLeaderboard } from "@/lib/leaderboard/service";
+import Image from "next/image";
 
 export const dynamic = "force-dynamic";
 
@@ -18,14 +19,19 @@ export default async function LeaderboardPage() {
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(127,127,255,0.15)_0%,rgba(11,13,20,0)_30%),linear-gradient(90deg,rgba(159,255,191,0.06),rgba(75,216,255,0.06),rgba(255,234,75,0.04))]" />
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-size-[48px_48px] opacity-30" />
 
-      <div className="relative mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="relative mx-auto flex w-full max-w-8xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 border-b border-[#373A4D]/70 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg border border-[#373A4D] bg-[#1c1e2c] text-sm font-black text-[#9FFFBF]">
-              LB
+            <div className="grid size-15 place-items-center overflow-hidden p-1.5">
+              <Image
+                alt="Sui Lending Dashboard icon"
+                className="size-full object-contain"
+                height={40}
+                src="/icon.png"
+                width={40}
+              />
             </div>
             <div>
-              <p className="text-xs font-medium uppercase text-[#8585B8]">Hourly position snapshots</p>
               <h1 className="text-2xl font-semibold text-white sm:text-3xl">Yield Points Leaderboard</h1>
             </div>
           </div>
@@ -59,22 +65,22 @@ export default async function LeaderboardPage() {
                 <p className="text-sm text-[#8585B8]">Ranked by lifetime points</p>
                 <h2 className="text-xl font-semibold text-white">Leaderboard</h2>
               </div>
-              <p className="text-sm text-[#a8a8c7]">Snapshot = Scallop + Bluefin + NAVI + Suilend verified USD value.</p>
+              {/* <p className="text-sm text-[#a8a8c7]">Snapshot = Scallop + Bluefin + NAVI + Suilend verified USD value.</p> */}
             </div>
 
             {leaderboard.entries.length ? (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] table-fixed text-left">
+                <table className="w-full min-w-[800px] table-fixed text-left">
                   <thead className="text-xs uppercase text-[#8585B8]">
                     <tr className="border-b border-[#373A4D]">
                       <th className="w-[80px] px-4 py-3 font-medium">Rank</th>
                       <th className="w-[180px] px-4 py-3 font-medium">Wallet</th>
                       <th className="w-[140px] px-4 py-3 text-right font-medium">Total</th>
-                      <th className="w-[140px] px-4 py-3 text-right font-medium">Last snapshot</th>
-                      <th className="w-[120px] px-4 py-3 text-right font-medium">Scallop</th>
+                      {/* <th className="w-[140px] px-4 py-3 text-right font-medium">Last snapshot</th> */}
+                      {/* <th className="w-[120px] px-4 py-3 text-right font-medium">Scallop</th>
                       <th className="w-[120px] px-4 py-3 text-right font-medium">Bluefin</th>
                       <th className="w-[120px] px-4 py-3 text-right font-medium">NAVI</th>
-                      <th className="w-[120px] px-4 py-3 text-right font-medium">Suilend</th>
+                      <th className="w-[120px] px-4 py-3 text-right font-medium">Suilend</th> */}
                     </tr>
                   </thead>
                   <tbody>
@@ -87,11 +93,11 @@ export default async function LeaderboardPage() {
                         </td>
                         <td className="px-4 py-4 font-mono text-sm text-[#dfdfed]">{shortAddress(entry.address)}</td>
                         <td className="px-4 py-4 text-right font-semibold text-[#9FFFBF]">{formatNumber(entry.totalPoints)}</td>
-                        <td className="px-4 py-4 text-right font-semibold text-[#FFEA4B]">{formatNumber(entry.lastSnapshotPoints)}</td>
-                        <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.scallop)}</td>
+                        {/* <td className="px-4 py-4 text-right font-semibold text-[#FFEA4B]">{formatNumber(entry.lastSnapshotPoints)}</td> */}
+                        {/* <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.scallop)}</td>
                         <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.bluefin)}</td>
                         <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.navi)}</td>
-                        <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.suilend)}</td>
+                        <td className="px-4 py-4 text-right text-sm text-[#dfdfed]">{formatNumber(entry.protocolPoints.suilend)}</td> */}
                       </tr>
                     ))}
                   </tbody>
@@ -109,7 +115,7 @@ export default async function LeaderboardPage() {
             <h2 className="mt-1 text-xl font-semibold text-white">Hourly verification</h2>
             <div className="mt-5 space-y-3">
               <RuleStep index="1" label="Read registered deposit wallets from the leaderboard wallet table." />
-              <RuleStep index="2" label="Query Scallop, Bluefin, NAVI, and Suilend positions for each wallet." />
+              <RuleStep index="2" label="Query Scallop, Bluefin, NAVI, and Suilend USDC, USDT, and USDSUI supply positions for each wallet." />
               <RuleStep index="3" label="If a protocol position is gone, that protocol contributes 0 for this snapshot." />
               <RuleStep index="4" label="Add verified USD values to the user's lifetime total points." />
             </div>

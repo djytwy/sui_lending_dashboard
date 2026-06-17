@@ -11,6 +11,7 @@ import type {
 
 const SUI_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 const PROTOCOLS: ProtocolId[] = ["scallop", "bluefin", "navi", "suilend"];
+const SCORED_ASSETS = new Set(["USDC", "USDT", "USDSUI"]);
 
 type WalletRow = {
   address: string;
@@ -280,7 +281,9 @@ async function createRunningSnapshot(snapshotHourIso: string) {
 async function scoreWallet(address: string) {
   const data = await getPositionsDashboardData(address);
   const protocolPoints = zeroProtocolPoints();
-  const supplyPositions = data.positions.filter((position) => position.side === "supply" && position.asset === "USDC");
+  const supplyPositions = data.positions.filter(
+    (position) => position.side === "supply" && SCORED_ASSETS.has(position.asset),
+  );
 
   for (const position of supplyPositions) {
     protocolPoints[position.protocol] += position.valueUsd ?? parseFormattedNumber(position.amount);

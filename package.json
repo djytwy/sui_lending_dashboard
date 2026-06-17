@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "leaderboard:snapshot": "node scripts/run-leaderboard-snapshot.mjs"
   },
   "dependencies": {
     "@alphafi/alphalend-sdk": "^3.0.1",
