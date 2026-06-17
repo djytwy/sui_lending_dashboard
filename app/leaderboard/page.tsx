@@ -119,11 +119,11 @@ export default async function LeaderboardPage() {
               <RuleStep index="3" label="If a protocol position is gone, that protocol contributes 0 for this snapshot." />
               <RuleStep index="4" label="Add verified USD values to the user's lifetime total points." />
             </div>
-            {latestSnapshot?.warnings.length ? (
+            {/* {latestSnapshot?.warnings.length ? (
               <p className="mt-4 rounded-lg border border-[#FFEA4B]/30 bg-[#FFEA4B]/10 p-3 text-xs text-[#FFEA4B]">
                 {latestSnapshot.warnings[0]}
               </p>
-            ) : null}
+            ) : null} */}
           </aside>
         </section>
       </div>
