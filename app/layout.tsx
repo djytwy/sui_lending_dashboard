@@ -4,7 +4,7 @@ import "./globals.css";
 import Providers from "./components/Providers";
 
 export const metadata: Metadata = {
-  title: "Sui Stablecoin Yield Dashboard",
+  title: "Sui Lending Dashboard",
   description: "Live APR, APY, deposits, withdrawals, and rewards for stablecoin yield opportunities on Sui.",
 };
 
